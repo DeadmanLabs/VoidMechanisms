@@ -15,14 +15,11 @@ import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.common.extensions.IMenuTypeExtension;
 
 import com.deadman.voidspaces.VoidSpaces;
-import com.deadman.voidspaces.client.gui.Screen;
 
 @EventBusSubscriber(modid = VoidSpaces.MODID, bus = EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
 public class Screens {
     @SubscribeEvent
     public static void onRegisterMenuScreens(RegisterMenuScreensEvent event) {
-        event.register(
-            
-        )
+
     }
 }

@@ -1,0 +1,24 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "MNM",
+    "NCN",
+    "MNM"
+  ],
+  "key": {
+    "M": {
+      "item": "minecraft:ender_pearl"
+    },
+    "N": {
+      "item": "minecraft:obsidian"
+    },
+    "C": {
+      "item": "minecraft:nether_star"
+    }
+  },
+  "result": {
+    "id": "voidspaces:void_core",
+    "count": 1
+  }
+}

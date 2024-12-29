@@ -1,0 +1,24 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "MNM",
+    "NCN",
+    "MNM"
+  ],
+  "key": {
+    "M": {
+      "item": "minecraft:obsidian"
+    },
+    "N": {
+      "item": "minecraft:end_stone"
+    },
+    "C": {
+      "item": "voidspaces:void_core"
+    }
+  },
+  "result": {
+    "id": "voidspaces:void_stabilizer",
+    "count": 1
+  }
+}

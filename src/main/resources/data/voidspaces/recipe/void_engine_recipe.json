@@ -1,0 +1,24 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "MNM",
+    "NCN",
+    "MNM"
+  ],
+  "key": {
+    "M": {
+      "item": "voidspaces:void_frame"
+    },
+    "N": {
+      "item": "minecraft:netherite_ingot"
+    },
+    "C": {
+      "item": "voidspaces:void_core"
+    }
+  },
+  "result": {
+    "id": "voidspaces:void_engine",
+    "count": 1
+  }
+}

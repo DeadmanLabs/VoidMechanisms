@@ -1,0 +1,24 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "MNM",
+    "NCN",
+    "MNM"
+  ],
+  "key": {
+    "M": {
+      "item": "minecraft:crying_obsidian"
+    },
+    "N": {
+      "item": "voidspaces:void_alloy"
+    },
+    "C": {
+      "item": "minecraft:blaze_rod"
+    }
+  },
+  "result": {
+    "id": "voidspaces:void_frame",
+    "count": 1
+  }
+}

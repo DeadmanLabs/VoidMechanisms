@@ -1,0 +1,24 @@
+{
+    "type": "minecraft:crafting_shaped",
+    "category": "misc",
+    "pattern": [
+      "PLP",
+      "LBL",
+      "PLP"
+    ],
+    "key": {
+        "P": {
+            "item": "minecraft:paper"
+        },
+        "L": {
+            "item": "minecraft:lapis_lazuli"
+        },
+        "B": {
+            "item": "minecraft:enchanted_book"
+        }
+    },
+    "result": {
+        "id": "voidspaces:void_blueprint",
+        "count": 1
+    }
+}

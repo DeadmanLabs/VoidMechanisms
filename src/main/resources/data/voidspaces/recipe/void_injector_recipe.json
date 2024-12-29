@@ -1,0 +1,24 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "MNM",
+    "NCN",
+    "MNM"
+  ],
+  "key": {
+    "M": {
+      "item": "voidspaces:void_alloy"
+    },
+    "N": {
+      "item": "minecraft:blaze_powder"
+    },
+    "C": {
+      "item": "minecraft:redstone_block"
+    }
+  },
+  "result": {
+    "id": "voidspaces:void_injector",
+    "count": 1
+  }
+}

@@ -1,8 +1,25 @@
 package com.deadman.voidspaces.item;
 
+import net.minecraft.world.level.Level;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.item.Rarity;
+import net.minecraft.world.item.Item;
+import net.minecraft.network.chat.Component;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResultHolder;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
+
+import net.neoforged.neoforge.common.MutableDataComponentHolder;
+
+import java.util.List;
 
 public class VoidCard extends Item {
     public VoidCard() {
@@ -10,9 +27,8 @@ public class VoidCard extends Item {
     }
 
     @Override
-    @OnlyIn(Dist.CLIENT)
     public boolean isFoil(ItemStack itemstack) {
-        super.isFoil(itemstack);
+        return super.isFoil(itemstack);
     }
 
     @Override
