@@ -5,7 +5,8 @@ import java.util.stream.IntStream;
 
 import javax.annotation.Nullable;
 
-import com.deadman.voidspaces.init.BlockEntities;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,9 +37,13 @@ import net.neoforged.neoforge.energy.EnergyStorage;
 import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.items.wrapper.SidedInvWrapper;
 
+import com.deadman.voidspaces.init.BlockEntities;
+import com.deadman.voidspaces.helpers.Dimensional;
+
 public class EngineEntity extends RandomizableContainerBlockEntity implements WorldlyContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(EngineEntity.class);
     private UUID owner;
+    private Dimensional dimension;
     //dimension
     public static final int TANK_CAPACITY = 20000;
     //private FluidStack fluidStorage = new FluidStack(20000);
@@ -54,8 +59,13 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
 
     public void setOwner(UUID uuid) {
         this.owner = uuid;
-        if (this.level instanceof ServerLevel serverLevel) {
-            //dim
+        LOGGER.info("Owner set to: {}", uuid);
+        if (this.level.getServer() != null) {
+            this.dimension = new Dimensional(this.level.getServer(), uuid);
+            LOGGER.info("Wrote new dimension: {}", this.dimension.dimension.toString());
+            this.dimension.teleportIn(this.level.getServer().getPlayerList().getPlayer(this.owner));
+        } else {
+            LOGGER.info("Level is not serverside!");
         }
     }
 
@@ -70,20 +80,42 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
         super.onLoad();
         if (!this.level.isClientSide) {
             this.setChanged();
-            //
+            //this was where we initialized the chunk miner, runs after load
         }
     }
 
     @Override
     protected void saveAdditional(CompoundTag tag, Provider provider) {
         super.saveAdditional(tag, provider);
-        //energyStorage
+        tag.put("energyStorage", energyStorage.serializeNBT(provider));
+        //if (this.dimension instanceof Dimensional dim) {
+        //    tag.putString("dimensionId", dim.dimension.toString());
+        //}
+        if (this.owner != null) {
+            tag.putUUID("owner", this.owner);
+        }
     }
 
     @Override
     protected void loadAdditional(CompoundTag tag, Provider provider) {
         super.loadAdditional(tag, provider);
-        //energyStorage
+        if (tag.get("energyStorage") instanceof IntTag intTag) {
+            energyStorage.deserializeNBT(provider, intTag);
+        }
+        if (tag.contains("owner")) {
+            this.owner = tag.getUUID("owner");
+        }
+        if (tag.contains("dimensionId") && this.owner != null) {
+            //ResourceLocation dimensionLocation = ResourceLocation.parse(tag.getString("dimensionId"));
+            //ResourceKey<Level> dimensionKey = ResourceKey.create(ResourceKey., dimensionLocation);
+            //this.dimension = new Dimensional(this.level.getServer(), this.owner, tag.getString("dimensionId"));
+        } else if (this.owner != null) {
+            if (this.level.getServer() != null) {
+                this.dimension = new Dimensional(this.level.getServer(), this.owner);
+            } else {
+                LOGGER.warn("Server in load is null!");
+            }
+        }
     }
 
     @Override
@@ -189,6 +221,7 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
             int retval = super.extractEnergy(maxExtract, simulate);
             if (!simulate) {
                 setChanged();
+                assert level != null;
                 level.sendBlockUpdated(worldPosition, level.getBlockState(worldPosition), level.getBlockState(worldPosition), 2);
             }
             return retval;

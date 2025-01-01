@@ -39,7 +39,7 @@ import javax.annotation.Nullable;
 import com.deadman.voidspaces.block.entity.EngineEntity;
 import com.deadman.voidspaces.init.BlockEntities;
 
-public class VoidEngine extends Block {
+public class VoidEngine extends Block implements EntityBlock {
     public static final Logger LOGGER = LoggerFactory.getLogger(VoidEngine.class);
     public static final BooleanProperty POWERED = BooleanProperty.create("powered");
 
@@ -49,6 +49,7 @@ public class VoidEngine extends Block {
     }
 
     @Nullable
+    @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
         return new EngineEntity(pos, state);
     }
@@ -67,8 +68,12 @@ public class VoidEngine extends Block {
     public void setPlacedBy(Level level, BlockPos pos, BlockState state, @Nullable LivingEntity placer, ItemStack stack) {
         if (level.getBlockEntity(pos) instanceof EngineEntity blockEntity) {
             if (placer instanceof ServerPlayer player) {
-                //
+                blockEntity.setOwner(player.getUUID());
+            } else {
+                LOGGER.info("placer is not a server player!");
             }
+        } else {
+            LOGGER.info("block entity at placed location is not engine entity!");
         }
     }
 

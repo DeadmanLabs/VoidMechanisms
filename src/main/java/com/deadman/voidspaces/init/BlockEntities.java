@@ -7,7 +7,7 @@ import net.minecraft.world.level.block.Block;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import net.neoforged.neoforge.registries.DeferredHolder;
 
-import com.deadman.voidspaces.block.entity.EngineEntity;
+import com.deadman.voidspaces.block.entity.*;
 import com.deadman.voidspaces.VoidSpaces;
 
 public class BlockEntities {
@@ -15,5 +15,9 @@ public class BlockEntities {
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<EngineEntity>> ENGINE_BLOCK_ENTITY = REGISTRY.register(
             "engine_block_entity",
             () -> BlockEntityType.Builder.of(EngineEntity::new, ModBlocks.VOID_ENGINE.get()).build(null)
+    );
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<AcceleratorEntity>> ACCELERATOR_BLOCK_ENTITY = REGISTRY.register(
+            "accelerator_block_entity",
+            () -> BlockEntityType.Builder.of(AcceleratorEntity::new, ModBlocks.VOID_ACCELERATOR.get()).build(null)
     );
 }
