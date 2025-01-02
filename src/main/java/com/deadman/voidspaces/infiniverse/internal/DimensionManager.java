@@ -53,6 +53,7 @@ import net.neoforged.neoforge.server.ServerLifecycleHooks;
 import com.deadman.voidspaces.VoidSpaces;
 import com.deadman.voidspaces.infiniverse.api.InfiniverseAPI;
 import com.deadman.voidspaces.infiniverse.api.UnregisterDimensionEvent;
+import com.deadman.voidspaces.helpers.DimensionalLevel;
 
 public final class DimensionManager implements InfiniverseAPI {
     private static final RegistrationInfo DIMENSION_REGISTRATION_INFO = new RegistrationInfo(Optional.empty(), Lifecycle.stable());
@@ -120,7 +121,7 @@ public final class DimensionManager implements InfiniverseAPI {
         }
 
         // create the level instance
-        final ServerLevel newLevel = new ServerLevel(
+        final DimensionalLevel newLevel = new DimensionalLevel(
                 server,
                 executor,
                 anvilConverter,

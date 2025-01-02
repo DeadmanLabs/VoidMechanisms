@@ -20,4 +20,16 @@ public class BlockEntities {
             "accelerator_block_entity",
             () -> BlockEntityType.Builder.of(AcceleratorEntity::new, ModBlocks.VOID_ACCELERATOR.get()).build(null)
     );
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<ExtractorEntity>> EXTRACTOR_BLOCK_ENTITY = REGISTRY.register(
+            "extractor_block_entity",
+            () -> BlockEntityType.Builder.of(ExtractorEntity::new, ModBlocks.VOID_EXTRACTOR.get()).build(null)
+    );
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<InjectorEntity>> INJECTOR_BLOCK_ENTITY = REGISTRY.register(
+            "injector_block_entity",
+            () -> BlockEntityType.Builder.of(InjectorEntity::new, ModBlocks.VOID_INJECTOR.get()).build(null)
+    );
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<StabilizerEntity>> STABILIZER_BLOCK_ENTITY = REGISTRY.register(
+            "stabilizer_block_entity",
+            () -> BlockEntityType.Builder.of(StabilizerEntity::new, ModBlocks.VOID_STABILIZER.get()).build(null)
+    );
 }

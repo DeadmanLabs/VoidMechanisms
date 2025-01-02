@@ -7,6 +7,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
+import net.minecraft.network.protocol.game.*;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerChunkCache;
@@ -15,10 +16,12 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.biome.*;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.border.BorderChangeListener;
 import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkGenerator;
@@ -55,11 +58,12 @@ public class Dimensional {
     private static int dimensionCount = 0;
     private final MinecraftServer server;
     public final ResourceKey<Level> dimension;
-    private final ServerLevel dimensionLevel;
+    private final DimensionalLevel dimensionLevel;
     private final UUID owner;
     private WorldBorder cage;
     private Map<Player, BlockPos> returnPositions = new HashMap<>();
     private SpaceContents machine = new SpaceContents();
+    private final Map<ServerPlayer, BorderChangeListener> borderListeners = new HashMap<>();
 
     public Dimensional(MinecraftServer server, UUID owner) {
         if (server == null || owner == null) {
@@ -67,20 +71,31 @@ public class Dimensional {
         }
         this.server = server;
         this.dimension = ResourceKey.create(Registries.DIMENSION, ResourceLocation.fromNamespaceAndPath(VoidSpaces.MODID, "voidspace_" + dimensionCount));
-        this.dimensionLevel = InfiniverseAPI.get().getOrCreateLevel(this.server, this.dimension, () -> createLevel(this.server, DimensionTypeOptions.FLAT));
+        ServerLevel infiniverseLevel = InfiniverseAPI.get().getOrCreateLevel(this.server, this.dimension, () -> createLevel(this.server, DimensionTypeOptions.FLAT));
+        if (infiniverseLevel instanceof DimensionalLevel dimensionalLevel) {
+            this.dimensionLevel = dimensionalLevel;
+        } else {
+            throw new IllegalStateException("Created dimension is not of DimensionalLevel type, instead is ServerLevel");
+        }
         this.owner = owner;
         this.cage = new WorldBorder();
         this.cage.setCenter(0, 0);
         this.cage.setSize(10);
         this.cage.setDamagePerBlock(1);
         this.cage.setWarningBlocks(0);
+        this.cage.setAbsoluteMaxSize((int) this.cage.getSize() + 1); // Prevent expansion
         dimensionCount++;
     }
 
     public Dimensional(MinecraftServer server, UUID owner, ResourceKey<Level> existingDimension) {
         this.server = server;
         this.dimension = ResourceKey.create(Registries.DIMENSION, existingDimension.location());
-        this.dimensionLevel = InfiniverseAPI.get().getOrCreateLevel(this.server, this.dimension, () -> createLevel(this.server, DimensionTypeOptions.FLAT));
+        ServerLevel infiniverseLevel = InfiniverseAPI.get().getOrCreateLevel(this.server, this.dimension, () -> createLevel(this.server, DimensionTypeOptions.FLAT));
+        if (infiniverseLevel instanceof DimensionalLevel dimensionalLevel) {
+            this.dimensionLevel = dimensionalLevel;
+        } else {
+            throw new IllegalStateException("Created dimension is not of DimensionalLevel type, instead is ServerLevel");
+        }
         this.owner = owner;
     }
 
@@ -158,24 +173,47 @@ public class Dimensional {
     }
 
     private void setWorldBorder() {
-        WorldBorder oldBorder = this.dimensionLevel.getWorldBorder();
+        this.beginBorderSync();
+        // Save the current world border settings
+        WorldBorder oldBorder = new WorldBorder();
+        oldBorder.setCenter(this.dimensionLevel.getWorldBorder().getCenterX(), this.dimensionLevel.getWorldBorder().getCenterZ());
+        oldBorder.setSize(this.dimensionLevel.getWorldBorder().getSize());
+        oldBorder.setDamagePerBlock(this.dimensionLevel.getWorldBorder().getDamagePerBlock());
+        oldBorder.setWarningBlocks(this.dimensionLevel.getWorldBorder().getWarningBlocks());
+
+        // Apply the cage settings to the dimension's world border
         this.dimensionLevel.getWorldBorder().setCenter(this.cage.getCenterX(), this.cage.getCenterZ());
         this.dimensionLevel.getWorldBorder().setSize(this.cage.getSize());
         this.dimensionLevel.getWorldBorder().setDamagePerBlock(this.cage.getDamagePerBlock());
         this.dimensionLevel.getWorldBorder().setWarningBlocks(this.cage.getWarningBlocks());
+
+        // Enable strict boundary enforcement
+        this.dimensionLevel.getWorldBorder().setAbsoluteMaxSize((int) this.cage.getSize() + 1); // Prevent expansion
+
+        // Save the old border settings to the cage
         this.cage = oldBorder;
+
+        LOGGER.info("World border set for dimension: center={}, size={}", this.dimensionLevel.getWorldBorder().getCenterX(), this.dimensionLevel.getWorldBorder().getSize());
     }
 
     private void resetWorldBorder() {
+        // Restore the dimension's world border to the saved settings
         this.dimensionLevel.getWorldBorder().setCenter(this.cage.getCenterX(), this.cage.getCenterZ());
         this.dimensionLevel.getWorldBorder().setSize(this.cage.getSize());
         this.dimensionLevel.getWorldBorder().setDamagePerBlock(this.cage.getDamagePerBlock());
         this.dimensionLevel.getWorldBorder().setWarningBlocks(this.cage.getWarningBlocks());
+
+        // Reset the cage to default settings
         this.cage = new WorldBorder();
         this.cage.setCenter(0, 0);
-        this.cage.setSize(64);
+        this.cage.setSize(10); // Default size
         this.cage.setDamagePerBlock(1);
         this.cage.setWarningBlocks(0);
+
+        //Stop listening
+        this.endBorderSync();
+
+        LOGGER.info("World border reset for dimension: center={}, size={}", this.dimensionLevel.getWorldBorder().getCenterX(), this.dimensionLevel.getWorldBorder().getSize());
     }
 
     public void teleportIn(ServerPlayer player) {
@@ -184,10 +222,12 @@ public class Dimensional {
             throw new IllegalStateException("Custom dimension not loaded!");
         }
         returnPositions.put(player, player.blockPosition());
-        this.setWorldBorder();
         player.teleportTo(dimensionLevel, 0, -63, 0, null, player.getYRot(), player.getXRot());
+        this.setWorldBorder(); //after because sync uses players in the dimension
         if (player.getUUID() == this.owner) {
             this.setBuilderMode(player, true);
+        } else {
+            LOGGER.info("Teleported player is not the owner!");
         }
     }
 
@@ -200,10 +240,12 @@ public class Dimensional {
         if (overworld == null) {
             throw new IllegalStateException("Overworld not loaded!");
         }
-        this.resetWorldBorder();
+        this.resetWorldBorder(); //We can put it here because we are removing the listeners
         player.teleportTo(overworld, returnPos.getX(), returnPos.getY(), returnPos.getZ(), null, player.getYRot(), player.getXRot());
         if (player.getUUID() == this.owner) {
             this.setBuilderMode(player, false);
+        } else {
+            LOGGER.info("Teleported player is not the owner!");
         }
         this.machine = Space.extractContents(this.dimensionLevel, new ChunkPos(0, 0));
         returnPositions.remove(player);
@@ -214,10 +256,12 @@ public class Dimensional {
             ListTag inventoryTag = player.getInventory().save(new ListTag());
             player.getPersistentData().put("RestrictedInventory", inventoryTag);
             player.getInventory().clearContent();
+            player.setGameMode(GameType.CREATIVE);
             player.getAbilities().instabuild = true;
             player.getAbilities().flying = true;
             player.getAbilities().invulnerable = true;
         } else {
+            player.setGameMode(GameType.SURVIVAL);
             player.getAbilities().instabuild = false;
             player.getAbilities().flying = false;
             player.getAbilities().invulnerable = false;
@@ -258,5 +302,59 @@ public class Dimensional {
         this.dimensionLevel.getEntities().get(chunkBoundingBox, entity -> entity.remove(Entity.RemovalReason.DISCARDED));
         this.machine = new SpaceContents();
         chunk.setUnsaved(true);
+    }
+
+    private void beginBorderSync() {
+        for (ServerPlayer player : this.dimensionLevel.players()) {
+            if (borderListeners.containsKey(player)) {
+                this.dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));
+            }
+            BorderChangeListener listener = new BorderChangeListener() {
+               @Override
+               public void onBorderSizeSet(WorldBorder border, double size) {
+                   player.connection.send(new ClientboundSetBorderSizePacket(border));
+               }
+
+               @Override
+                public void onBorderSizeLerping(WorldBorder border, double oldSize, double newSize, long time) {
+                   player.connection.send(new ClientboundSetBorderLerpSizePacket(border));
+               }
+
+               @Override
+                public void onBorderCenterSet(WorldBorder border, double x, double z) {
+                   player.connection.send(new ClientboundSetBorderCenterPacket(border));
+               }
+
+               @Override
+                public void onBorderSetWarningTime(WorldBorder border, int warningTime) {
+                   player.connection.send(new ClientboundSetBorderWarningDelayPacket(border));
+               }
+
+               @Override
+                public void onBorderSetWarningBlocks(WorldBorder border, int warningBlocks) {
+                   player.connection.send(new ClientboundSetBorderWarningDistancePacket(border));
+               }
+
+               @Override
+                public void onBorderSetDamagePerBlock(WorldBorder border, double damagePerBlock) {
+
+               }
+
+               @Override
+                public void onBorderSetDamageSafeZOne(WorldBorder border, double safeZone) {
+
+               }
+            };
+
+            this.dimensionLevel.getWorldBorder().addListener(listener);
+            borderListeners.put(player, listener);
+        }
+    }
+
+    private void endBorderSync() {
+        for (Map.Entry<ServerPlayer, BorderChangeListener> entry : borderListeners.entrySet()) {
+            this.dimensionLevel.getWorldBorder().removeListener(entry.getValue());
+        }
+        borderListeners.clear();
     }
 }

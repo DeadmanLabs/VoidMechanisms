@@ -24,6 +24,8 @@ import org.slf4j.LoggerFactory;
 
 import io.netty.buffer.Unpooled;
 
+import com.deadman.voidspaces.block.entity.AcceleratorEntity;
+
 public class VoidAccelerator extends Block implements EntityBlock {
     public static final Logger LOGGER = LoggerFactory.getLogger(VoidAccelerator.class);
     public static final BooleanProperty POWERED = BooleanProperty.create("powered");
@@ -36,7 +38,7 @@ public class VoidAccelerator extends Block implements EntityBlock {
     @Nullable
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
-        return new BlockEntity();
+        return new AcceleratorEntity(pos, state);
     }
 
     @Nullable

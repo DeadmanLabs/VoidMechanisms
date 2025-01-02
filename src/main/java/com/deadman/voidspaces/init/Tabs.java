@@ -24,9 +24,16 @@ public class Tabs {
             .title(Component.literal("Void Spaces"))
             .icon(() -> new ItemStack(ModBlocks.VOID_ENGINE.get(), 1))
             .displayItems((parameters, output) -> {
-                LOGGER.info("ModBlocks.VOID_ENGINE: " + ModBlocks.VOID_ENGINE.get());
-                LOGGER.info("ModBlocks.VOID_ENGINE as Item: " + ModBlocks.VOID_ENGINE.get().asItem());
                 output.accept(new ItemStack(ModBlocks.VOID_ENGINE.get().asItem(), 1));
+                output.accept(new ItemStack(ModBlocks.VOID_INJECTOR.get().asItem(), 1));
+                output.accept(new ItemStack(ModBlocks.VOID_EXTRACTOR.get().asItem(), 1));
+                output.accept(new ItemStack(ModBlocks.VOID_ACCELERATOR.get().asItem(), 1));
+                output.accept(new ItemStack(ModBlocks.VOID_STABILIZER.get().asItem(), 1));
+                output.accept(ModItems.VOID_ALLOY.get());
+                output.accept(ModItems.VOID_BLUEPRINT.get());
+                output.accept(ModItems.VOID_CARD.get());
+                output.accept(ModItems.VOID_CORE.get());
+                output.accept(ModItems.VOID_FRAME.get());
             })
             .withSearchBar()
             .build()
