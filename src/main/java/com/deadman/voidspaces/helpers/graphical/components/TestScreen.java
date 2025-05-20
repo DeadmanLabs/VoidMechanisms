@@ -36,7 +36,7 @@ public class TestScreen extends Screen {
         verticalProgressBar = new ProgressBar(
                 this.width / 2 - 8, // Center horizontally
                 this.height / 2 - 60, // Position above the horizontal bar
-                16, 42, // Width and height (matching CoFH's energy bar)
+                16, 100, // Width and height (matching CoFH's energy bar)
                 false // Vertical orientation
         );
         addRenderableWidget(verticalProgressBar);
@@ -45,7 +45,7 @@ public class TestScreen extends Screen {
         horizontalProgressBar = new ProgressBar(
                 this.width / 2 - 50, // Center horizontally
                 this.height / 2, // Position below the vertical bar
-                42, 16, // Width and height
+                64, 16, // Width and height
                 true // Horizontal orientation
         );
         addRenderableWidget(horizontalProgressBar);
