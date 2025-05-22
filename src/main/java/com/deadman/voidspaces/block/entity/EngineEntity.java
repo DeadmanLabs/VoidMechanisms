@@ -7,6 +7,7 @@ import javax.annotation.Nullable;
 
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,6 +32,7 @@ import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.world.level.block.entity.RandomizableContainerBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.energy.EnergyStorage;
@@ -57,6 +59,11 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
         this.location = pos;
     }
 
+    /**
+     * Holds the raw persisted NBT from disk for deferred processing when the level is available.
+     */
+    private CompoundTag persistedDataTag;
+
     public void setOwner(UUID uuid) {
         this.owner = uuid;
         LOGGER.info("Owner set to: {}", uuid);
@@ -80,7 +87,15 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
         super.onLoad();
         if (!this.level.isClientSide) {
             this.setChanged();
-            //this was where we initialized the chunk miner, runs after load
+            if (this.persistedDataTag != null) {
+                readPersistedData(this.persistedDataTag);
+                this.persistedDataTag = null;
+            }
+            if (this.dimension != null) {
+                this.dimension.beginBorderSync();
+                this.dimension.setWorldBorder();
+                
+            }
         }
     }
 
@@ -88,12 +103,11 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
     protected void saveAdditional(CompoundTag tag, Provider provider) {
         super.saveAdditional(tag, provider);
         tag.put("energyStorage", energyStorage.serializeNBT(provider));
-        //if (this.dimension instanceof Dimensional dim) {
-        //    tag.putString("dimensionId", dim.dimension.toString());
-        //}
-        if (this.owner != null) {
-            tag.putUUID("owner", this.owner);
-        }
+        writePersistedData(tag);
+    }
+
+    public Dimensional getDimensional() {
+        return this.dimension;
     }
 
     @Override
@@ -102,18 +116,68 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
         if (tag.get("energyStorage") instanceof IntTag intTag) {
             energyStorage.deserializeNBT(provider, intTag);
         }
+        this.persistedDataTag = tag.copy();
+        if (this.level != null && this.level.getServer() != null) {
+            readPersistedData(tag);
+        }
+    }
+
+    /**
+     * Writes the dimension and return location into the given tag for persistence.
+     */
+    public void writePersistedData(CompoundTag tag) {
+        if (this.owner != null) {
+            tag.putUUID("owner", this.owner);
+        }
+        if (this.dimension != null) {
+            tag.putString("dimension", this.dimension.dimension.location().toString());
+            CompoundTag returnTag = this.dimension.serializeReturnLocation();
+            if (returnTag != null) {
+                tag.put("returnLocation", returnTag);
+            }
+            CompoundTag cageTag = this.dimension.serializeCageSettings();
+            tag.put("cage", cageTag);
+        }
+    }
+
+
+    /**
+     * Reads the persisted dimension and return location from the given tag.
+     */
+    public void readPersistedData(CompoundTag tag) {
         if (tag.contains("owner")) {
             this.owner = tag.getUUID("owner");
         }
-        if (tag.contains("dimensionId") && this.owner != null) {
-            //ResourceLocation dimensionLocation = ResourceLocation.parse(tag.getString("dimensionId"));
-            //ResourceKey<Level> dimensionKey = ResourceKey.create(ResourceKey., dimensionLocation);
-            //this.dimension = new Dimensional(this.level.getServer(), this.owner, tag.getString("dimensionId"));
-        } else if (this.owner != null) {
-            if (this.level.getServer() != null) {
-                this.dimension = new Dimensional(this.level.getServer(), this.owner);
+        if (this.level != null && this.level.getServer() != null
+            && tag.contains("dimension") && this.owner != null) {
+            String dimStr = tag.getString("dimension");
+            ResourceKey<Level> dimKey = ResourceKey.create(
+                Registries.DIMENSION,
+                ResourceLocation.parse(dimStr)
+            );
+            Dimensional existing = Dimensional.getForDimension(dimKey);
+            if (existing != null) {
+                this.dimension = existing;
             } else {
-                LOGGER.warn("Server in load is null!");
+                this.dimension = new Dimensional(this.level.getServer(), this.owner, dimKey);
+            }
+            if (tag.contains("returnLocation")) {
+                CompoundTag returnTag = tag.getCompound("returnLocation");
+                String origStr = returnTag.getString("origDim");
+                ResourceKey<Level> origKey = ResourceKey.create(
+                    Registries.DIMENSION,
+                    ResourceLocation.parse(origStr)
+                );
+                BlockPos origPos = new BlockPos(
+                    returnTag.getInt("x"),
+                    returnTag.getInt("y"),
+                    returnTag.getInt("z")
+                );
+                this.dimension.restoreReturnLocation(this.owner, origKey, origPos);
+            }
+            if (tag.contains("cage")) {
+                CompoundTag cageTag = tag.getCompound("cage");
+                this.dimension.restoreCageSettings(cageTag);
             }
         }
     }

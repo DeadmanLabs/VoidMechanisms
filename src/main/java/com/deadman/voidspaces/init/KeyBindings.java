@@ -16,9 +16,15 @@ public class KeyBindings {
             GLFW.GLFW_KEY_P, // Default key: P
             "key.category.voidspaces" // Category
     );
+    public static final KeyMapping RETURN_ORIGIN = new KeyMapping(
+            "key.voidspaces.return_origin", // Translation key
+            GLFW.GLFW_KEY_O, // Default key: O
+            "key.category.voidspaces" // Category
+    );
 
     @SubscribeEvent
     public static void registerKeyBindings(RegisterKeyMappingsEvent event) {
         event.register(OPEN_TEST_MENU);
+        event.register(RETURN_ORIGIN);
     }
 }

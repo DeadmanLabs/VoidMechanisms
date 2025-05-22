@@ -7,6 +7,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.protocol.game.*;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.server.MinecraftServer;
@@ -55,13 +56,20 @@ import com.deadman.voidspaces.helpers.Space.SpaceContents;
 
 public class Dimensional {
     private static final Logger LOGGER = LoggerFactory.getLogger(Dimensional.class);
+
+    // Tracks all Dimensional instances by their custom dimension key
+    private static final Map<ResourceKey<Level>, Dimensional> DIMENSIONALS = new HashMap<>();
+
+    // Stores a player's original world and position before entering the voidspace
+    private static record ReturnLocation(ResourceKey<Level> originalDimension, BlockPos originalPos) {}
+
     private static int dimensionCount = 0;
     private final MinecraftServer server;
     public final ResourceKey<Level> dimension;
     private final DimensionalLevel dimensionLevel;
     private final UUID owner;
     private WorldBorder cage;
-    private Map<Player, BlockPos> returnPositions = new HashMap<>();
+    private Map<UUID, ReturnLocation> returnPositions = new HashMap<>();
     private SpaceContents machine = new SpaceContents();
     private final Map<ServerPlayer, BorderChangeListener> borderListeners = new HashMap<>();
 
@@ -85,6 +93,7 @@ public class Dimensional {
         this.cage.setWarningBlocks(0);
         this.cage.setAbsoluteMaxSize((int) this.cage.getSize() + 1); // Prevent expansion
         dimensionCount++;
+        DIMENSIONALS.put(this.dimension, this);
     }
 
     public Dimensional(MinecraftServer server, UUID owner, ResourceKey<Level> existingDimension) {
@@ -97,6 +106,13 @@ public class Dimensional {
             throw new IllegalStateException("Created dimension is not of DimensionalLevel type, instead is ServerLevel");
         }
         this.owner = owner;
+        this.cage = new WorldBorder();
+        this.cage.setCenter(0, 0);
+        this.cage.setSize(10);
+        this.cage.setDamagePerBlock(1);
+        this.cage.setWarningBlocks(0);
+        this.cage.setAbsoluteMaxSize((int) this.cage.getSize() + 1);
+        DIMENSIONALS.put(this.dimension, this);
     }
 
     private LevelStem createLevel(MinecraftServer server, DimensionTypeOptions typeOption) {
@@ -172,7 +188,7 @@ public class Dimensional {
         FLAT
     }
 
-    private void setWorldBorder() {
+    public void setWorldBorder() {
         this.beginBorderSync();
         // Save the current world border settings
         WorldBorder oldBorder = new WorldBorder();
@@ -216,14 +232,31 @@ public class Dimensional {
         LOGGER.info("World border reset for dimension: center={}, size={}", this.dimensionLevel.getWorldBorder().getCenterX(), this.dimensionLevel.getWorldBorder().getSize());
     }
 
+    /**
+     * Sends all border packets directly to a player to ensure they receive complete border information
+     * regardless of dimension loading state.
+     */
+    public void sendBorderPacketsToPlayer(ServerPlayer player) {
+        // Send all border packets directly to ensure client has complete border information
+        player.connection.send(new ClientboundSetBorderSizePacket(this.dimensionLevel.getWorldBorder()));
+        player.connection.send(new ClientboundSetBorderCenterPacket(this.dimensionLevel.getWorldBorder()));
+        player.connection.send(new ClientboundSetBorderWarningDelayPacket(this.dimensionLevel.getWorldBorder()));
+        player.connection.send(new ClientboundSetBorderWarningDistancePacket(this.dimensionLevel.getWorldBorder()));
+        player.connection.send(new ClientboundSetBorderLerpSizePacket(this.dimensionLevel.getWorldBorder()));
+        
+        LOGGER.info("Sent border packets directly to player: {}", player.getScoreboardName());
+    }
+
     public void teleportIn(ServerPlayer player) {
         ServerLevel dimensionLevel = server.getLevel(this.dimension);
         if (dimensionLevel == null) {
             throw new IllegalStateException("Custom dimension not loaded!");
         }
-        returnPositions.put(player, player.blockPosition());
-        player.teleportTo(dimensionLevel, 0, -63, 0, null, player.getYRot(), player.getXRot());
+        returnPositions.put(player.getUUID(), new ReturnLocation(player.level().dimension(), player.blockPosition()));
+        player.teleportTo(dimensionLevel, 0, -63, 0, player.getYRot(), player.getXRot());
         this.setWorldBorder(); //after because sync uses players in the dimension
+        
+        
         if (player.getUUID() == this.owner) {
             this.setBuilderMode(player, true);
         } else {
@@ -232,23 +265,24 @@ public class Dimensional {
     }
 
     public void teleportOut(ServerPlayer player) {
-        if (!returnPositions.containsKey(player)) {
-            throw new IllegalStateException("Player's return position is not saved!");
+        ReturnLocation returnLoc = returnPositions.remove(player.getUUID());
+        if (returnLoc == null) {
+            throw new IllegalStateException("Player's return location is not saved!");
         }
-        BlockPos returnPos = returnPositions.get(player);
-        ServerLevel overworld = server.getLevel(Level.OVERWORLD);
-        if (overworld == null) {
-            throw new IllegalStateException("Overworld not loaded!");
+        ServerLevel returnLevel = server.getLevel(returnLoc.originalDimension);
+        if (returnLevel == null) {
+            throw new IllegalStateException("Return dimension not loaded!");
         }
-        this.resetWorldBorder(); //We can put it here because we are removing the listeners
-        player.teleportTo(overworld, returnPos.getX(), returnPos.getY(), returnPos.getZ(), null, player.getYRot(), player.getXRot());
+        this.resetWorldBorder();
+        player.teleportTo(returnLevel,
+            returnLoc.originalPos.getX(), returnLoc.originalPos.getY(), returnLoc.originalPos.getZ(),
+            player.getYRot(), player.getXRot());
         if (player.getUUID() == this.owner) {
             this.setBuilderMode(player, false);
         } else {
             LOGGER.info("Teleported player is not the owner!");
         }
         this.machine = Space.extractContents(this.dimensionLevel, new ChunkPos(0, 0));
-        returnPositions.remove(player);
     }
 
     private void setBuilderMode(ServerPlayer player, boolean enabled) {
@@ -271,6 +305,70 @@ public class Dimensional {
             }
         }
         player.onUpdateAbilities();
+    }
+
+    /**
+     * Retrieves the Dimensional instance associated with the given custom dimension key.
+     */
+    public static Dimensional getForDimension(ResourceKey<Level> key) {
+        return DIMENSIONALS.get(key);
+    }
+    
+    /**
+     * Returns the world border associated with this dimension.
+     * This is a public accessor to allow other classes to get the border settings.
+     */
+    public WorldBorder getWorldBorder() {
+        return this.dimensionLevel.getWorldBorder();
+    }
+
+    /**
+     * Serializes the owner's return location into a CompoundTag.
+     */
+    public CompoundTag serializeReturnLocation() {
+        ReturnLocation rl = returnPositions.get(owner);
+        if (rl == null) {
+            return null;
+        }
+        CompoundTag tag = new CompoundTag();
+        tag.putString("origDim", rl.originalDimension.location().toString());
+        tag.putInt("x", rl.originalPos.getX());
+        tag.putInt("y", rl.originalPos.getY());
+        tag.putInt("z", rl.originalPos.getZ());
+        return tag;
+    }
+
+    /**
+     * Restores the owner's return location from persisted data.
+     */
+    public void restoreReturnLocation(UUID owner, ResourceKey<Level> origDimension, BlockPos originalPos) {
+        returnPositions.put(owner, new ReturnLocation(origDimension, originalPos));
+    }
+
+    /**
+     * Serializes the current world border (cage) settings for persistence.
+     */
+    public CompoundTag serializeCageSettings() {
+        CompoundTag tag = new CompoundTag();
+        tag.putDouble("cageCenterX", this.cage.getCenterX());
+        tag.putDouble("cageCenterZ", this.cage.getCenterZ());
+        tag.putDouble("cageSize", this.cage.getSize());
+        tag.putDouble("cageDamage", this.cage.getDamagePerBlock());
+        tag.putInt("cageWarning", this.cage.getWarningBlocks());
+        return tag;
+    }
+
+    /**
+     * Restores the saved world border (cage) settings.
+     */
+    public void restoreCageSettings(CompoundTag tag) {
+        if (this.cage == null) {
+            this.cage = new WorldBorder();
+        }
+        this.cage.setCenter(tag.getDouble("cageCenterX"), tag.getDouble("cageCenterZ"));
+        this.cage.setSize(tag.getDouble("cageSize"));
+        this.cage.setDamagePerBlock(tag.getDouble("cageDamage"));
+        this.cage.setWarningBlocks(tag.getInt("cageWarning"));
     }
 
     public void clear() {
@@ -304,7 +402,7 @@ public class Dimensional {
         chunk.setUnsaved(true);
     }
 
-    private void beginBorderSync() {
+    public void beginBorderSync() {
         for (ServerPlayer player : this.dimensionLevel.players()) {
             if (borderListeners.containsKey(player)) {
                 this.dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));

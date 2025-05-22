@@ -18,7 +18,7 @@ public class ModItems {
     );
     public static final DeferredItem<BlockItem> VOID_ENGINE = REGISTRY.register(
             "void_engine",
-            () -> new BlockItem(ModBlocks.VOID_ENGINE.get(), new Item.Properties())
+            () -> new VoidEngineBlockItem(ModBlocks.VOID_ENGINE.get(), new Item.Properties())
     );
     public static final DeferredItem<BlockItem> VOID_EXTRACTOR = REGISTRY.register(
             "void_extractor",

@@ -17,15 +17,14 @@ import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.Containers;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.inventory.AbstractContainerMenu;
-import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.FriendlyByteBuf;
 
@@ -35,6 +34,7 @@ import org.slf4j.LoggerFactory;
 import io.netty.buffer.Unpooled;
 
 import javax.annotation.Nullable;
+import net.minecraft.nbt.CompoundTag;
 
 import com.deadman.voidspaces.block.entity.EngineEntity;
 import com.deadman.voidspaces.init.BlockEntities;
@@ -64,18 +64,6 @@ public class VoidEngine extends Block implements EntityBlock {
                             null;
     }
 
-    @Override
-    public void setPlacedBy(Level level, BlockPos pos, BlockState state, @Nullable LivingEntity placer, ItemStack stack) {
-        if (level.getBlockEntity(pos) instanceof EngineEntity blockEntity) {
-            if (placer instanceof ServerPlayer player) {
-                blockEntity.setOwner(player.getUUID());
-            } else {
-                LOGGER.info("placer is not a server player!");
-            }
-        } else {
-            LOGGER.info("block entity at placed location is not engine entity!");
-        }
-    }
 
     @Override
     protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
@@ -106,6 +94,11 @@ public class VoidEngine extends Block implements EntityBlock {
         if (state.getBlock() != newState.getBlock()) {
             BlockEntity blockEntity = level.getBlockEntity(pos);
             if (blockEntity instanceof EngineEntity engineEntity) {
+                CompoundTag nbt = new CompoundTag();
+                engineEntity.writePersistedData(nbt);
+                ItemStack stack = new ItemStack(this);
+                BlockItem.setBlockEntityData(stack, BlockEntities.ENGINE_BLOCK_ENTITY.get(), nbt);
+                Containers.dropItemStack(level, pos.getX(), pos.getY(), pos.getZ(), stack);
                 Containers.dropContents(level, pos, engineEntity);
                 level.updateNeighbourForOutputSignal(pos, this);
                 level.invalidateCapabilities(pos);
