@@ -16,9 +16,15 @@ public class KeyBindings {
             GLFW.GLFW_KEY_P, // Default key: P
             "key.category.voidspaces" // Category
     );
+    public static final KeyMapping EXIT_DIMENSION = new KeyMapping(
+            "key.voidspaces.exit_dimension",
+            GLFW.GLFW_KEY_O,
+            "key.category.voidspaces"
+    );
 
     @SubscribeEvent
     public static void registerKeyBindings(RegisterKeyMappingsEvent event) {
         event.register(OPEN_TEST_MENU);
+        event.register(EXIT_DIMENSION);
     }
 }

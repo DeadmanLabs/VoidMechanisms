@@ -39,6 +39,7 @@ import com.deadman.voidspaces.init.ModBlocks;
 import com.deadman.voidspaces.init.ModItems;
 import com.deadman.voidspaces.init.BlockEntities;
 import com.deadman.voidspaces.init.DataComponents;
+import com.deadman.voidspaces.init.DataAttachments;
 import com.deadman.voidspaces.init.Screens;
 import com.deadman.voidspaces.init.Network;
 import com.deadman.voidspaces.init.Menus;
@@ -75,6 +76,7 @@ public class VoidSpaces
         CREATIVE_MODE_TABS.register(modEventBus);
         BLOCK_ENTITY_TYPES.register(modEventBus);
         DataComponents.REGISTRY.register(modEventBus);
+        DataAttachments.ATTACHMENT_TYPES.register(modEventBus);
         Menus.REGISTRY.register(modEventBus);
 
         // Register ourselves for server and other game events we are interested in.

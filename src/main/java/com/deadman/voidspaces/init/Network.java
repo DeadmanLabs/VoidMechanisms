@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import com.deadman.voidspaces.VoidSpaces;
 import com.deadman.voidspaces.infiniverse.internal.UpdateDimensionsPacket;
+import com.deadman.voidspaces.init.ExitDimensionPacket;
 
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
@@ -15,6 +16,8 @@ public class Network {
     private static final Logger LOGGER = LoggerFactory.getLogger(Network.class);
     @SubscribeEvent
     public static void register(final RegisterPayloadHandlersEvent event) {
-        event.registrar(VoidSpaces.MODID).optional().playToClient(UpdateDimensionsPacket.TYPE, UpdateDimensionsPacket.STREAM_CODEC, UpdateDimensionsPacket::handle);
+        var registrar = event.registrar(VoidSpaces.MODID).optional();
+        registrar.playToClient(UpdateDimensionsPacket.TYPE, UpdateDimensionsPacket.STREAM_CODEC, UpdateDimensionsPacket::handle);
+        registrar.playToServer(ExitDimensionPacket.TYPE, ExitDimensionPacket.STREAM_CODEC, ExitDimensionPacket::handle);
     }
 }

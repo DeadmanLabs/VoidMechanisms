@@ -21,9 +21,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.HolderLookup.RegistryLookup;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.core.component.DataComponents;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.item.component.CustomData;
 import java.util.stream.Stream;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
@@ -34,8 +32,19 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.item.Item;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.ChatFormatting;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.world.entity.player.Player;
+import java.util.List;
+import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -74,8 +83,37 @@ public class VoidEngine extends Block implements EntityBlock {
 
     @Override
     public void setPlacedBy(Level level, BlockPos pos, BlockState state, @Nullable LivingEntity placer, ItemStack stack) {
-        if (level.getBlockEntity(pos) instanceof EngineEntity blockEntity) {
+        if (level.getBlockEntity(pos) instanceof EngineEntity blockEntity && level instanceof ServerLevel serverLevel) {
+            // Check if this is a restored engine (has NBT data)
+            if (stack.has(DataComponents.CUSTOM_DATA)) {
+                CompoundTag itemTag = stack.get(DataComponents.CUSTOM_DATA).copyTag();
+                CompoundTag blockTag = itemTag.getCompound("BlockEntityTag");
+                if (!blockTag.isEmpty()) {
+                    LOGGER.info("Restoring VoidEngine from NBT data");
+                    RegistryLookup<BlockEntityType<?>> lookup = serverLevel.registryAccess()
+                            .lookup(Registries.BLOCK_ENTITY_TYPE)
+                            .orElseThrow();
+                    HolderLookup.Provider registryProvider = HolderLookup.Provider.create(Stream.of(lookup));
+                    blockEntity.readAdditionalSaveData(blockTag, registryProvider);
+                    blockEntity.setChanged();
+                    // Teleport the placer into the restored dimension
+                    if (placer instanceof ServerPlayer player) {
+                        blockEntity.teleportIn(player);
+                    }
+                    return;
+                }
+            }
+            // This is a new engine being placed
             if (placer instanceof ServerPlayer player) {
+                // Check if we're inside a contained dimension - prevent nested engines
+                ResourceKey<Level> currentDim = player.level().dimension();
+                if (currentDim.location().getNamespace().equals("voidspaces") && 
+                    currentDim.location().getPath().startsWith("voidspace_")) {
+                    LOGGER.info("Preventing VoidEngine placement inside contained dimension");
+                    // Drop the item instead of placing the block
+                    level.destroyBlock(pos, true);
+                    return;
+                }
                 blockEntity.setOwner(player.getUUID());
             } else {
                 LOGGER.info("placer is not a server player!");
@@ -122,7 +160,9 @@ public class VoidEngine extends Block implements EntityBlock {
                     HolderLookup.Provider registryProvider = HolderLookup.Provider.create(Stream.of(lookup));
                     CompoundTag blockTag = engineEntity.saveWithoutMetadata(registryProvider);
                     if (!blockTag.isEmpty()) {
-                        CustomData.set(DataComponents.BLOCK_ENTITY_DATA, stack, blockTag);
+                        CompoundTag tag = new CompoundTag();
+                        tag.put("BlockEntityTag", blockTag);
+                        stack.set(DataComponents.CUSTOM_DATA, net.minecraft.world.item.component.CustomData.of(tag));
                     }
                 }
                 Containers.dropItemStack(level,
@@ -140,6 +180,56 @@ public class VoidEngine extends Block implements EntityBlock {
         BlockEntity blockEntity = level.getBlockEntity(pos);
         if (blockEntity instanceof EngineEntity engineEntity) {
             engineEntity.updateEngineState(pos, isPowered);
+        }
+    }
+
+    @Override
+    public void appendHoverText(ItemStack stack, Item.TooltipContext context, List<Component> tooltip, TooltipFlag flag) {
+        if (stack.has(DataComponents.CUSTOM_DATA)) {
+            CompoundTag itemTag = stack.get(DataComponents.CUSTOM_DATA).copyTag();
+            CompoundTag blockTag = itemTag.getCompound("BlockEntityTag");
+            if (!blockTag.isEmpty()) {
+                if (blockTag.hasUUID("owner")) {
+                    UUID owner = blockTag.getUUID("owner");
+                    String ownerName = getPlayerName(owner);
+                    tooltip.add(Component.literal("Owner: " + ownerName).withStyle(ChatFormatting.GRAY));
+                }
+                if (blockTag.contains("dimensionId")) {
+                    String dimensionId = blockTag.getString("dimensionId");
+                    tooltip.add(Component.literal("Dimension: " + dimensionId).withStyle(ChatFormatting.BLUE));
+                }
+                tooltip.add(Component.literal("Contains: Void Space").withStyle(ChatFormatting.DARK_PURPLE));
+            } else {
+                tooltip.add(Component.literal("Empty Engine").withStyle(ChatFormatting.GRAY));
+            }
+        } else {
+            tooltip.add(Component.literal("Empty Engine").withStyle(ChatFormatting.GRAY));
+        }
+        super.appendHoverText(stack, context, tooltip, flag);
+    }
+
+    private String getPlayerName(UUID uuid) {
+        try {
+            Minecraft minecraft = Minecraft.getInstance();
+            if (minecraft.level != null) {
+                // Try to find the player in the current level
+                Player player = minecraft.level.getPlayerByUUID(uuid);
+                if (player != null) {
+                    return player.getName().getString();
+                }
+            }
+            
+            // If we can't find the player, check if it's the current player
+            if (minecraft.player != null && minecraft.player.getUUID().equals(uuid)) {
+                return minecraft.player.getName().getString();
+            }
+            
+            // Fall back to showing a shortened UUID
+            String uuidStr = uuid.toString();
+            return uuidStr.substring(0, 8) + "...";
+        } catch (Exception e) {
+            // Safe fallback
+            return "Unknown Player";
         }
     }
 }

@@ -24,6 +24,7 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.ContainerHelper;
 import net.minecraft.world.WorldlyContainer;
 import net.minecraft.world.entity.player.Inventory;
@@ -45,6 +46,8 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
     private static final Logger LOGGER = LoggerFactory.getLogger(EngineEntity.class);
     private UUID owner;
     private Dimensional dimension;
+    private String savedDimensionId; // Temporary storage for dimension ID during load
+    private CompoundTag savedReturnData; // Temporary storage for return data during load
     //dimension
     public static final int TANK_CAPACITY = 20000;
     //private FluidStack fluidStorage = new FluidStack(20000);
@@ -81,8 +84,55 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
         super.onLoad();
         if (!this.level.isClientSide) {
             this.setChanged();
-            //this was where we initialized the chunk miner, runs after load
+            // Initialize dimension if we have owner but no dimension (restored from NBT)
+            if (this.owner != null && this.dimension == null && this.level.getServer() != null) {
+                if (this.savedDimensionId != null) {
+                    // Restore existing dimension from saved ID
+                    LOGGER.info("Restoring existing dimension on load: {}", this.savedDimensionId);
+                    try {
+                        ResourceLocation dimensionLocation = ResourceLocation.parse(this.savedDimensionId);
+                        ResourceKey<Level> dimensionKey = ResourceKey.create(Registries.DIMENSION, dimensionLocation);
+                        this.dimension = new Dimensional(this.level.getServer(), this.owner, dimensionKey);
+                        
+                        // Load return data if we saved it
+                        if (this.savedReturnData != null) {
+                            this.dimension.loadReturnData(this.savedReturnData);
+                            this.savedReturnData = null;
+                        }
+                        
+                        this.savedDimensionId = null; // Clear the temporary storage
+                        LOGGER.info("Successfully restored dimension from saved ID: {}", dimensionKey);
+                        
+                        // Check if the owner is already in this dimension and restore their return position
+                        ServerPlayer ownerPlayer = this.level.getServer().getPlayerList().getPlayer(this.owner);
+                        if (ownerPlayer != null && ownerPlayer.level().dimension().location().toString().equals(dimensionKey.location().toString())) {
+                            this.dimension.restoreOwnerReturnPosition(ownerPlayer);
+                            LOGGER.info("Player {} was already in dimension on restore, restored return position", ownerPlayer.getName().getString());
+                        }
+                        
+                        // Also check for any other players who might be in this dimension
+                        for (ServerPlayer player : this.level.getServer().getPlayerList().getPlayers()) {
+                            if (player.level().dimension().location().toString().equals(dimensionKey.location().toString())) {
+                                this.dimension.restoreOwnerReturnPosition(player);
+                                LOGGER.info("Restored return position for player {} found in dimension on reload", player.getName().getString());
+                            }
+                        }
+                    } catch (IllegalArgumentException e) {
+                        LOGGER.warn("Failed to restore dimension from saved ID: {}", this.savedDimensionId, e);
+                        this.savedDimensionId = null;
+                        this.savedReturnData = null;
+                    }
+                } else {
+                    // Create new dimension (fresh engine placement)
+                    LOGGER.info("Creating new dimension on load for owner: {}", this.owner);
+                    this.dimension = new Dimensional(this.level.getServer(), this.owner);
+                }
+            }
         }
+    }
+
+    public Dimensional getDimension() {
+        return this.dimension;
     }
 
     @Override
@@ -95,6 +145,13 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
         if (this.owner != null) {
             tag.putUUID("owner", this.owner);
         }
+        if (this.dimension != null) {
+            CompoundTag returnData = this.dimension.saveReturnData();
+            if (!returnData.isEmpty()) {
+                tag.put("returnData", returnData);
+            }
+        }
+        LOGGER.info("Saved EngineEntity NBT - Owner: {}, DimensionId: {}", this.owner, this.dimension != null ? this.dimension.dimension.location().toString() : "null");
     }
 
     @Override
@@ -105,27 +162,64 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
         }
         if (tag.hasUUID("owner")) {
             this.owner = tag.getUUID("owner");
+            LOGGER.info("Loaded owner from NBT: {}", this.owner);
         }
         if (tag.contains("dimensionId") && this.owner != null) {
             String dimensionIdString = tag.getString("dimensionId");
+            this.savedDimensionId = dimensionIdString; // Save for onLoad()
+            LOGGER.info("Loading existing dimension from NBT: {}", dimensionIdString);
             try {
                 ResourceLocation dimensionLocation = ResourceLocation.parse(dimensionIdString);
                 ResourceKey<Level> dimensionKey = ResourceKey.create(Registries.DIMENSION, dimensionLocation);
-                if (this.level.getServer() != null) {
+                if (this.level != null && this.level.getServer() != null) {
                     this.dimension = new Dimensional(this.level.getServer(), this.owner, dimensionKey);
+                    // Load return data if available
+                    if (tag.contains("returnData")) {
+                        this.dimension.loadReturnData(tag.getCompound("returnData"));
+                    }
+                    this.savedDimensionId = null; // Clear since we successfully created the dimension
+                    this.savedReturnData = null;
+                    LOGGER.info("Successfully restored dimension: {}", dimensionKey);
                 } else {
-                    LOGGER.warn("Server in load is null!");
+                    // Save return data for later
+                    if (tag.contains("returnData")) {
+                        this.savedReturnData = tag.getCompound("returnData");
+                    }
+                    LOGGER.warn("Server in load is null, will restore in onLoad()");
                 }
             } catch (IllegalArgumentException e) {
-                LOGGER.warn("Invalid dimensionId: {}", dimensionIdString);
-            }
-        } else if (this.owner != null) {
-            if (this.level.getServer() != null) {
-                this.dimension = new Dimensional(this.level.getServer(), this.owner);
-            } else {
-                LOGGER.warn("Server in load is null!");
+                LOGGER.warn("Invalid dimensionId: {}", dimensionIdString, e);
+                this.savedDimensionId = null;
             }
         }
+        // Don't create a new dimension here if we don't have an existing one
+        // That should only happen when a player places the block
+    }
+
+    public void readAdditionalSaveData(CompoundTag tag, Provider provider) {
+        this.loadAdditional(tag, provider);
+    }
+
+    public void teleportIn(ServerPlayer player) {
+        if (this.dimension != null) {
+            // Restore return position for owner if available
+            this.dimension.restoreOwnerReturnPosition(player);
+            this.dimension.teleportIn(player);
+        } else {
+            LOGGER.warn("Attempted to teleport player into null dimension!");
+        }
+    }
+
+    public UUID getOwner() {
+        return this.owner;
+    }
+
+    public ResourceKey<Level> getDimensionKey() {
+        return this.dimension != null ? this.dimension.dimension : null;
+    }
+
+    public String getDimensionName() {
+        return this.dimension != null ? this.dimension.dimension.location().toString() : "None";
     }
 
     @Override
