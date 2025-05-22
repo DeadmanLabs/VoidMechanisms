@@ -17,6 +17,14 @@ import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.Containers;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.core.HolderLookup.RegistryLookup;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.item.component.CustomData;
+import java.util.stream.Stream;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.MenuProvider;
@@ -106,6 +114,20 @@ public class VoidEngine extends Block implements EntityBlock {
         if (state.getBlock() != newState.getBlock()) {
             BlockEntity blockEntity = level.getBlockEntity(pos);
             if (blockEntity instanceof EngineEntity engineEntity) {
+                ItemStack stack = new ItemStack(this);
+                if (level instanceof ServerLevel serverLevel) {
+                    RegistryLookup<BlockEntityType<?>> lookup = serverLevel.registryAccess()
+                            .lookup(Registries.BLOCK_ENTITY_TYPE)
+                            .orElseThrow();
+                    HolderLookup.Provider registryProvider = HolderLookup.Provider.create(Stream.of(lookup));
+                    CompoundTag blockTag = engineEntity.saveWithoutMetadata(registryProvider);
+                    if (!blockTag.isEmpty()) {
+                        CustomData.set(DataComponents.BLOCK_ENTITY_DATA, stack, blockTag);
+                    }
+                }
+                Containers.dropItemStack(level,
+                        pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D,
+                        stack);
                 Containers.dropContents(level, pos, engineEntity);
                 level.updateNeighbourForOutputSignal(pos, this);
                 level.invalidateCapabilities(pos);

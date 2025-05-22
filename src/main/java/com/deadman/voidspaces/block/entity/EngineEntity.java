@@ -7,6 +7,7 @@ import javax.annotation.Nullable;
 
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.core.registries.Registries;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -88,9 +89,9 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
     protected void saveAdditional(CompoundTag tag, Provider provider) {
         super.saveAdditional(tag, provider);
         tag.put("energyStorage", energyStorage.serializeNBT(provider));
-        //if (this.dimension instanceof Dimensional dim) {
-        //    tag.putString("dimensionId", dim.dimension.toString());
-        //}
+        if (this.dimension != null) {
+            tag.putString("dimensionId", this.dimension.dimension.location().toString());
+        }
         if (this.owner != null) {
             tag.putUUID("owner", this.owner);
         }
@@ -102,13 +103,22 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
         if (tag.get("energyStorage") instanceof IntTag intTag) {
             energyStorage.deserializeNBT(provider, intTag);
         }
-        if (tag.contains("owner")) {
+        if (tag.hasUUID("owner")) {
             this.owner = tag.getUUID("owner");
         }
         if (tag.contains("dimensionId") && this.owner != null) {
-            //ResourceLocation dimensionLocation = ResourceLocation.parse(tag.getString("dimensionId"));
-            //ResourceKey<Level> dimensionKey = ResourceKey.create(ResourceKey., dimensionLocation);
-            //this.dimension = new Dimensional(this.level.getServer(), this.owner, tag.getString("dimensionId"));
+            String dimensionIdString = tag.getString("dimensionId");
+            try {
+                ResourceLocation dimensionLocation = ResourceLocation.parse(dimensionIdString);
+                ResourceKey<Level> dimensionKey = ResourceKey.create(Registries.DIMENSION, dimensionLocation);
+                if (this.level.getServer() != null) {
+                    this.dimension = new Dimensional(this.level.getServer(), this.owner, dimensionKey);
+                } else {
+                    LOGGER.warn("Server in load is null!");
+                }
+            } catch (IllegalArgumentException e) {
+                LOGGER.warn("Invalid dimensionId: {}", dimensionIdString);
+            }
         } else if (this.owner != null) {
             if (this.level.getServer() != null) {
                 this.dimension = new Dimensional(this.level.getServer(), this.owner);
