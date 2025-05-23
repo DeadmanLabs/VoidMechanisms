@@ -1,22 +1,17 @@
 {
   "type": "minecraft:crafting_shapeless",
   "category": "misc",
-  "pattern": [
-    "   ",
-    "NEP",
-    "   "
-  ],
-  "key": {
-    "N": {
+  "ingredients": [
+    {
       "item": "minecraft:netherite_scrap"
     },
-    "E": {
+    {
       "item": "minecraft:end_stone"
     },
-    "P": {
-      "item": "voidspaces:phantom_membrane"
+    {
+      "item": "minecraft:phantom_membrane"
     }
-  },
+  ],
   "result": {
     "id": "voidspaces:void_alloy",
     "count": 1

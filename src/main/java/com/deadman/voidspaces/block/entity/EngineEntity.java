@@ -115,6 +115,12 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
                             if (player.level().dimension().location().toString().equals(dimensionKey.location().toString())) {
                                 this.dimension.restoreOwnerReturnPosition(player);
                                 LOGGER.info("Restored return position for player {} found in dimension on reload", player.getName().getString());
+                                
+                                // Also ensure world border is set up for this player
+                                this.level.getServer().execute(() -> {
+                                    this.dimension.ensureWorldBorderForPlayer(player);
+                                    LOGGER.info("Ensured world border for player {} during dimension restoration", player.getName().getString());
+                                });
                             }
                         }
                     } catch (IllegalArgumentException e) {

@@ -54,6 +54,7 @@ import org.slf4j.LoggerFactory;
 import com.deadman.voidspaces.infiniverse.api.*;
 import com.deadman.voidspaces.helpers.Space;
 import com.deadman.voidspaces.helpers.Space.SpaceContents;
+import java.lang.reflect.Field;
 
 public class Dimensional {
     private static final Logger LOGGER = LoggerFactory.getLogger(Dimensional.class);
@@ -63,7 +64,6 @@ public class Dimensional {
     public final ResourceKey<Level> dimension;
     private final ServerLevel dimensionLevel;
     private final UUID owner;
-    private WorldBorder cage;
     private Map<Player, BlockPos> returnPositions = new HashMap<>();
     private Map<Player, ResourceKey<Level>> returnDimensions = new HashMap<>();
     private BlockPos ownerReturnPosition;
@@ -79,14 +79,22 @@ public class Dimensional {
         this.dimension = ResourceKey.create(Registries.DIMENSION, ResourceLocation.fromNamespaceAndPath(VoidSpaces.MODID, "voidspace_" + dimensionCount));
         ServerLevel infiniverseLevel = InfiniverseAPI.get().getOrCreateLevel(this.server, this.dimension, () -> createLevel(this.server, DimensionTypeOptions.FLAT));
         this.dimensionLevel = infiniverseLevel;
-        LOGGER.info("New dimensional level type: {}", infiniverseLevel.getClass().getSimpleName());
+        LOGGER.info("New dimensional level type: {} for dimension: {}", infiniverseLevel.getClass().getSimpleName(), this.dimension.location());
+        
+        // If this is a regular ServerLevel instead of DimensionalLevel, apply workaround
+        if (!(infiniverseLevel instanceof DimensionalLevel)) {
+            LOGGER.warn("New dimension {} created as regular ServerLevel instead of DimensionalLevel - applying world border workaround", this.dimension.location());
+            this.applyWorldBorderWorkaround(infiniverseLevel);
+        }
+        
+        // Immediately test the world border
+        WorldBorder testBorder = infiniverseLevel.getWorldBorder();
+        LOGGER.info("World border after creation - Type: {}, Center: ({}, {}), Size: {}", 
+                   testBorder.getClass().getSimpleName(), 
+                   testBorder.getCenterX(), 
+                   testBorder.getCenterZ(), 
+                   testBorder.getSize());
         this.owner = owner;
-        this.cage = new WorldBorder();
-        this.cage.setCenter(0, 0);
-        this.cage.setSize(10);
-        this.cage.setDamagePerBlock(1);
-        this.cage.setWarningBlocks(0);
-        this.cage.setAbsoluteMaxSize((int) this.cage.getSize() + 1); // Prevent expansion
         dimensionCount++;
         WRAPPERS.put(this.dimension, this);
     }
@@ -96,15 +104,23 @@ public class Dimensional {
         this.dimension = ResourceKey.create(Registries.DIMENSION, existingDimension.location());
         ServerLevel infiniverseLevel = InfiniverseAPI.get().getOrCreateLevel(this.server, this.dimension, () -> createLevel(this.server, DimensionTypeOptions.FLAT));
         this.dimensionLevel = infiniverseLevel;
-        LOGGER.info("Existing dimensional level type: {}", infiniverseLevel.getClass().getSimpleName());
+        LOGGER.info("Existing dimensional level type: {} for dimension: {}", infiniverseLevel.getClass().getSimpleName(), this.dimension.location());
+        
+        // If this is a regular ServerLevel from save loading, we need to work around it
+        if (!(infiniverseLevel instanceof DimensionalLevel)) {
+            LOGGER.warn("Dimension {} loaded as regular ServerLevel instead of DimensionalLevel - applying world border workaround", this.dimension.location());
+            // We can't replace the level, but we can override its world border behavior
+            this.applyWorldBorderWorkaround(infiniverseLevel);
+        }
+        
+        // Immediately test the world border
+        WorldBorder testBorder = infiniverseLevel.getWorldBorder();
+        LOGGER.info("World border after existing creation - Type: {}, Center: ({}, {}), Size: {}", 
+                   testBorder.getClass().getSimpleName(), 
+                   testBorder.getCenterX(), 
+                   testBorder.getCenterZ(), 
+                   testBorder.getSize());
         this.owner = owner;
-        // Initialize the cage WorldBorder for existing dimensions too
-        this.cage = new WorldBorder();
-        this.cage.setCenter(0, 0);
-        this.cage.setSize(10);
-        this.cage.setDamagePerBlock(1);
-        this.cage.setWarningBlocks(0);
-        this.cage.setAbsoluteMaxSize((int) this.cage.getSize() + 1);
         WRAPPERS.put(this.dimension, this);
     }
 
@@ -185,66 +201,22 @@ public class Dimensional {
         FLAT
     }
 
-    private void setWorldBorder() {
-        this.beginBorderSync();
-        
-        // If we don't have a saved border (new dimension), create one
-        if (this.cage == null) {
-            // Save the current world border settings
-            WorldBorder oldBorder = new WorldBorder();
-            oldBorder.setCenter(this.dimensionLevel.getWorldBorder().getCenterX(), this.dimensionLevel.getWorldBorder().getCenterZ());
-            oldBorder.setSize(this.dimensionLevel.getWorldBorder().getSize());
-            oldBorder.setDamagePerBlock(this.dimensionLevel.getWorldBorder().getDamagePerBlock());
-            oldBorder.setWarningBlocks(this.dimensionLevel.getWorldBorder().getWarningBlocks());
-            this.cage = oldBorder;
-        }
-        
-        // Set a small world border around the spawn area
-        this.dimensionLevel.getWorldBorder().setCenter(0, 0);
-        this.dimensionLevel.getWorldBorder().setSize(50); // 50x50 area
-        this.dimensionLevel.getWorldBorder().setDamagePerBlock(0.2);
-        this.dimensionLevel.getWorldBorder().setWarningBlocks(5);
-        
-        // Send border packets to all players in the dimension with a slight delay
+    private void ensureWorldBorderSynced() {
+        // Send initialization packets to all players in the dimension
+        // The actual world border is handled inherently by DimensionalLevel.getWorldBorder()
         this.dimensionLevel.getServer().execute(() -> {
             for (ServerPlayer player : this.dimensionLevel.players()) {
                 if (player.connection != null) {
-                    // Send all border packets
-                    player.connection.send(new ClientboundSetBorderCenterPacket(this.dimensionLevel.getWorldBorder()));
-                    player.connection.send(new ClientboundSetBorderSizePacket(this.dimensionLevel.getWorldBorder()));
-                    player.connection.send(new ClientboundSetBorderWarningDelayPacket(this.dimensionLevel.getWorldBorder()));
-                    player.connection.send(new ClientboundSetBorderWarningDistancePacket(this.dimensionLevel.getWorldBorder()));
-                    
-                    // Also send initialization packet
+                    // Send initialization packet to ensure client sync
                     player.connection.send(new ClientboundInitializeBorderPacket(this.dimensionLevel.getWorldBorder()));
-                    
-                    LOGGER.info("Sent world border packets to player: {}", player.getName().getString());
+                    LOGGER.info("Synced inherent world border for player: {}", player.getName().getString());
                 }
             }
         });
-
-        LOGGER.info("World border set for dimension: center={}, size={}", this.dimensionLevel.getWorldBorder().getCenterX(), this.dimensionLevel.getWorldBorder().getSize());
+        LOGGER.info("World border synced for dimension: center={}, size={}", this.dimensionLevel.getWorldBorder().getCenterX(), this.dimensionLevel.getWorldBorder().getSize());
     }
 
-    private void resetWorldBorder() {
-        // Restore the dimension's world border to the saved settings
-        this.dimensionLevel.getWorldBorder().setCenter(this.cage.getCenterX(), this.cage.getCenterZ());
-        this.dimensionLevel.getWorldBorder().setSize(this.cage.getSize());
-        this.dimensionLevel.getWorldBorder().setDamagePerBlock(this.cage.getDamagePerBlock());
-        this.dimensionLevel.getWorldBorder().setWarningBlocks(this.cage.getWarningBlocks());
-
-        // Reset the cage to default settings
-        this.cage = new WorldBorder();
-        this.cage.setCenter(0, 0);
-        this.cage.setSize(10); // Default size
-        this.cage.setDamagePerBlock(1);
-        this.cage.setWarningBlocks(0);
-
-        //Stop listening
-        this.endBorderSync();
-
-        LOGGER.info("World border reset for dimension: center={}, size={}", this.dimensionLevel.getWorldBorder().getCenterX(), this.dimensionLevel.getWorldBorder().getSize());
-    }
+    // World border is now inherent to DimensionalLevel - no manual reset needed
 
     public void teleportIn(ServerPlayer player) {
         ServerLevel dimensionLevel = server.getLevel(this.dimension);
@@ -269,9 +241,7 @@ public class Dimensional {
         
         player.teleportTo(dimensionLevel, 0, -63, 0, null, player.getYRot(), player.getXRot());
         
-        this.setWorldBorder(); //after because sync uses players in the dimension
-        
-        // Ensure world border is visible for the player
+        // Sync the inherent world border with the player
         this.ensureWorldBorderForPlayer(player);
         
         if (player.getUUID().equals(this.owner)) {
@@ -296,8 +266,16 @@ public class Dimensional {
                 returnPositions.put(player, returnPos);
                 returnDimensions.put(player, returnDimension);
                 LOGGER.info("Restored return position from Data Attachments for player: {}", player.getName().getString());
+            } else if (player.getUUID().equals(this.owner) && this.ownerReturnPosition != null && this.ownerReturnDimension != null) {
+                // Try owner return position from NBT
+                returnPos = this.ownerReturnPosition;
+                returnDimension = this.ownerReturnDimension;
+                LOGGER.info("Using owner return position from NBT for player: {}", player.getName().getString());
             } else {
-                throw new IllegalStateException("Player's return position or dimension is not saved!");
+                // Fallback to overworld spawn
+                LOGGER.warn("No return position found for player: {}, defaulting to overworld spawn", player.getName().getString());
+                returnPos = new BlockPos(0, 64, 0);
+                returnDimension = Level.OVERWORLD;
             }
         }
         ServerLevel returnLevel = server.getLevel(returnDimension);
@@ -308,7 +286,7 @@ public class Dimensional {
                 throw new IllegalStateException("Overworld not loaded!");
             }
         }
-        this.resetWorldBorder(); //We can put it here because we are removing the listeners
+        // No manual world border reset needed - handled inherently by DimensionalLevel
         
         // Use changeDimension instead of teleportTo to avoid respawn packet encoding issues
         if (returnLevel.dimension() != player.level().dimension()) {
@@ -333,60 +311,144 @@ public class Dimensional {
         returnPositions.remove(player);
         returnDimensions.remove(player);
         
+        // Remove border listener
+        if (borderListeners.containsKey(player)) {
+            this.dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));
+            borderListeners.remove(player);
+            LOGGER.info("Removed border change listener for player: {}", player.getName().getString());
+        }
+        
         // Clear Data Attachments
         DataAttachments.ReturnPositionData returnData = player.getData(DataAttachments.RETURN_POSITION);
         returnData.clear();
     }
 
     public void restoreOwnerReturnPosition(ServerPlayer player) {
+        // Always ensure world border is properly synced for any player in this dimension
+        this.ensureWorldBorderForPlayer(player);
+        
         if (player.getUUID().equals(this.owner)) {
-            // First try from saved NBT data
-            if (this.ownerReturnPosition != null && this.ownerReturnDimension != null) {
-                // Only restore if not already set (to avoid overwriting current session data)
-                if (!returnPositions.containsKey(player) || !returnDimensions.containsKey(player)) {
-                    returnPositions.put(player, this.ownerReturnPosition);
-                    returnDimensions.put(player, this.ownerReturnDimension);
-                    
-                    // Also update Data Attachments
-                    DataAttachments.ReturnPositionData returnData = player.getData(DataAttachments.RETURN_POSITION);
-                    returnData.setReturnPosition(this.ownerReturnPosition);
-                    returnData.setReturnDimension(this.ownerReturnDimension);
-                    
-                    LOGGER.info("Restored owner return position: {} in dimension {}", this.ownerReturnPosition, this.ownerReturnDimension);
-                }
+            // Check if we already have return data for this player
+            DataAttachments.ReturnPositionData returnData = player.getData(DataAttachments.RETURN_POSITION);
+            
+            if (!returnData.hasReturnData() && this.ownerReturnPosition != null && this.ownerReturnDimension != null) {
+                // Restore from NBT data if Data Attachments are empty
+                returnPositions.put(player, this.ownerReturnPosition);
+                returnDimensions.put(player, this.ownerReturnDimension);
+                
+                // Also update Data Attachments for consistency
+                returnData.setReturnPosition(this.ownerReturnPosition);
+                returnData.setReturnDimension(this.ownerReturnDimension);
+                
+                LOGGER.info("Restored owner return position from NBT: {} in dimension {}", this.ownerReturnPosition, this.ownerReturnDimension);
+            } else if (returnData.hasReturnData()) {
+                // Restore from Data Attachments
+                returnPositions.put(player, returnData.getReturnPosition());
+                returnDimensions.put(player, returnData.getReturnDimension());
+                LOGGER.info("Restored return position from Data Attachments: {} in dimension {}", returnData.getReturnPosition(), returnData.getReturnDimension());
             } else {
-                // Try to restore from Data Attachments
-                DataAttachments.ReturnPositionData returnData = player.getData(DataAttachments.RETURN_POSITION);
-                if (returnData.hasReturnData()) {
-                    returnPositions.put(player, returnData.getReturnPosition());
-                    returnDimensions.put(player, returnData.getReturnDimension());
-                    LOGGER.info("Restored return position from Data Attachments: {} in dimension {}", returnData.getReturnPosition(), returnData.getReturnDimension());
-                }
+                LOGGER.warn("No return position data available for owner: {}", player.getName().getString());
             }
         }
-        
-        // Always ensure world border is properly set for any player in this dimension
-        this.ensureWorldBorderForPlayer(player);
     }
     
     public void ensureWorldBorderForPlayer(ServerPlayer player) {
-        // Make sure the world border is properly applied and synced for this player
+        // Make sure the inherent world border is synced for this specific player
         if (player.level() == this.dimensionLevel && player.connection != null) {
-            this.dimensionLevel.getServer().execute(() -> {
-                // Send all border packets to ensure visibility
-                player.connection.send(new ClientboundInitializeBorderPacket(this.dimensionLevel.getWorldBorder()));
-                player.connection.send(new ClientboundSetBorderCenterPacket(this.dimensionLevel.getWorldBorder()));
-                player.connection.send(new ClientboundSetBorderSizePacket(this.dimensionLevel.getWorldBorder()));
-                player.connection.send(new ClientboundSetBorderWarningDelayPacket(this.dimensionLevel.getWorldBorder()));
-                player.connection.send(new ClientboundSetBorderWarningDistancePacket(this.dimensionLevel.getWorldBorder()));
-                
-                LOGGER.info("Ensured world border packets sent to player: {} (center: {}, {}, size: {})", 
-                           player.getName().getString(),
-                           this.dimensionLevel.getWorldBorder().getCenterX(),
-                           this.dimensionLevel.getWorldBorder().getCenterZ(),
-                           this.dimensionLevel.getWorldBorder().getSize());
-            });
+            // Force the world border to be initialized by accessing it
+            WorldBorder border = this.dimensionLevel.getWorldBorder();
+            
+            LOGGER.info("Starting world border sync for player: {} (dimension type: {}, border center: {}, {}, size: {}, damage: {}, warning: {})", 
+                       player.getName().getString(),
+                       this.dimensionLevel.getClass().getSimpleName(),
+                       border.getCenterX(),
+                       border.getCenterZ(),
+                       border.getSize(),
+                       border.getDamagePerBlock(),
+                       border.getWarningBlocks());
+            
+            // Add a border change listener to track when border changes are detected
+            this.addBorderListenerForPlayer(player);
+            
+            // Send the border packets with proper timing (player should be fully loaded at this point)
+            this.sendBorderPacketsToPlayer(player, border, 0);
         }
+    }
+    
+    private void sendBorderPacketsToPlayer(ServerPlayer player, WorldBorder border, int delay) {
+        LOGGER.info("Sending world border packets to player: {} at delay {} ticks", player.getName().getString(), delay);
+        
+        try {
+            player.connection.send(new ClientboundInitializeBorderPacket(border));
+            LOGGER.info("Sent ClientboundInitializeBorderPacket to {}", player.getName().getString());
+            
+            player.connection.send(new ClientboundSetBorderCenterPacket(border));
+            LOGGER.info("Sent ClientboundSetBorderCenterPacket to {} (center: {}, {})", 
+                       player.getName().getString(), border.getCenterX(), border.getCenterZ());
+            
+            player.connection.send(new ClientboundSetBorderSizePacket(border));
+            LOGGER.info("Sent ClientboundSetBorderSizePacket to {} (size: {})", 
+                       player.getName().getString(), border.getSize());
+            
+            player.connection.send(new ClientboundSetBorderWarningDelayPacket(border));
+            LOGGER.info("Sent ClientboundSetBorderWarningDelayPacket to {}", player.getName().getString());
+            
+            player.connection.send(new ClientboundSetBorderWarningDistancePacket(border));
+            LOGGER.info("Sent ClientboundSetBorderWarningDistancePacket to {} (warning blocks: {})", 
+                       player.getName().getString(), border.getWarningBlocks());
+            
+        } catch (Exception e) {
+            LOGGER.error("Failed to send world border packets to player: {}", player.getName().getString(), e);
+        }
+    }
+    
+    private void addBorderListenerForPlayer(ServerPlayer player) {
+        // Remove existing listener if any
+        if (borderListeners.containsKey(player)) {
+            this.dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));
+        }
+        
+        BorderChangeListener listener = new BorderChangeListener() {
+            @Override
+            public void onBorderSizeSet(WorldBorder border, double size) {
+                LOGGER.info("Border size changed for player {}: {}", player.getName().getString(), size);
+            }
+
+            @Override
+            public void onBorderSizeLerping(WorldBorder border, double oldSize, double newSize, long time) {
+                LOGGER.info("Border size lerping for player {}: {} -> {} over {} ticks", 
+                           player.getName().getString(), oldSize, newSize, time);
+            }
+
+            @Override
+            public void onBorderCenterSet(WorldBorder border, double x, double z) {
+                LOGGER.info("Border center changed for player {}: {}, {}", player.getName().getString(), x, z);
+            }
+
+            @Override
+            public void onBorderSetWarningTime(WorldBorder border, int warningTime) {
+                LOGGER.info("Border warning time changed for player {}: {}", player.getName().getString(), warningTime);
+            }
+
+            @Override
+            public void onBorderSetWarningBlocks(WorldBorder border, int warningBlocks) {
+                LOGGER.info("Border warning blocks changed for player {}: {}", player.getName().getString(), warningBlocks);
+            }
+
+            @Override
+            public void onBorderSetDamagePerBlock(WorldBorder border, double damagePerBlock) {
+                LOGGER.info("Border damage per block changed for player {}: {}", player.getName().getString(), damagePerBlock);
+            }
+
+            @Override
+            public void onBorderSetDamageSafeZOne(WorldBorder border, double safeZone) {
+                LOGGER.info("Border damage safe zone changed for player {}: {}", player.getName().getString(), safeZone);
+            }
+        };
+
+        this.dimensionLevel.getWorldBorder().addListener(listener);
+        borderListeners.put(player, listener);
+        LOGGER.info("Added border change listener for player: {}", player.getName().getString());
     }
 
     public CompoundTag saveReturnData() {
@@ -398,16 +460,7 @@ public class Dimensional {
             tag.putString("ownerReturnDim", this.ownerReturnDimension.location().toString());
         }
         
-        // Save world border settings
-        if (this.cage != null) {
-            CompoundTag borderTag = new CompoundTag();
-            borderTag.putDouble("centerX", this.cage.getCenterX());
-            borderTag.putDouble("centerZ", this.cage.getCenterZ());
-            borderTag.putDouble("size", this.cage.getSize());
-            borderTag.putDouble("damagePerBlock", this.cage.getDamagePerBlock());
-            borderTag.putInt("warningBlocks", this.cage.getWarningBlocks());
-            tag.put("worldBorder", borderTag);
-        }
+        // World border is now inherent to DimensionalLevel - no need to save
         
         return tag;
     }
@@ -425,34 +478,15 @@ public class Dimensional {
             }
         }
         
-        // Load world border settings
-        if (tag.contains("worldBorder")) {
-            CompoundTag borderTag = tag.getCompound("worldBorder");
-            if (this.cage == null) {
-                this.cage = new WorldBorder();
+        // World border is now inherent to DimensionalLevel - no need to load
+        // Ensure any players currently in this dimension see the inherent world border with proper delay
+        for (ServerPlayer player : this.dimensionLevel.players()) {
+            if (player.connection != null) {
+                // Use delayed sync to ensure client is ready
+                this.ensureWorldBorderForPlayer(player);
             }
-            this.cage.setCenter(borderTag.getDouble("centerX"), borderTag.getDouble("centerZ"));
-            this.cage.setSize(borderTag.getDouble("size"));
-            this.cage.setDamagePerBlock(borderTag.getDouble("damagePerBlock"));
-            this.cage.setWarningBlocks(borderTag.getInt("warningBlocks"));
-            
-            // Also apply the world border to the actual dimension immediately
-            this.dimensionLevel.getWorldBorder().setCenter(0, 0);
-            this.dimensionLevel.getWorldBorder().setSize(50);
-            this.dimensionLevel.getWorldBorder().setDamagePerBlock(0.2);
-            this.dimensionLevel.getWorldBorder().setWarningBlocks(5);
-            
-            // Send border update packets to all players in this dimension
-            for (ServerPlayer player : this.dimensionLevel.players()) {
-                if (player.connection != null) {
-                    player.connection.send(new ClientboundInitializeBorderPacket(this.dimensionLevel.getWorldBorder()));
-                    player.connection.send(new ClientboundSetBorderCenterPacket(this.dimensionLevel.getWorldBorder()));
-                    player.connection.send(new ClientboundSetBorderSizePacket(this.dimensionLevel.getWorldBorder()));
-                }
-            }
-            
-            LOGGER.info("Restored world border settings from NBT and applied to dimension");
         }
+        LOGGER.info("Scheduled world border sync for all players in dimension");
     }
 
     private void setBuilderMode(ServerPlayer player, boolean enabled) {
@@ -541,57 +575,56 @@ public class Dimensional {
         chunk.setUnsaved(true);
     }
 
-    private void beginBorderSync() {
-        for (ServerPlayer player : this.dimensionLevel.players()) {
-            if (borderListeners.containsKey(player)) {
-                this.dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));
+    // Border sync is now handled inherently by DimensionalLevel
+    
+    private void applyWorldBorderWorkaround(ServerLevel level) {
+        try {
+            LOGGER.info("Applying world border workaround for dimension: {}", level.dimension().location());
+            
+            // Create our custom world border
+            DimensionalWorldBorder customBorder = new DimensionalWorldBorder(level);
+            
+            // Set appropriate values
+            customBorder.setCenter(0.0, 0.0);
+            customBorder.setSize(50.0);
+            customBorder.setDamagePerBlock(0.2);
+            customBorder.setWarningBlocks(5);
+            customBorder.setAbsoluteMaxSize(51);
+            
+            // Use reflection to replace the worldBorder field in ServerLevel
+            Field worldBorderField = null;
+            Class<?> currentClass = level.getClass();
+            
+            // Search through the class hierarchy for the worldBorder field
+            while (currentClass != null && worldBorderField == null) {
+                try {
+                    worldBorderField = currentClass.getDeclaredField("worldBorder");
+                } catch (NoSuchFieldException e) {
+                    // Try parent class
+                    currentClass = currentClass.getSuperclass();
+                }
             }
-            BorderChangeListener listener = new BorderChangeListener() {
-               @Override
-               public void onBorderSizeSet(WorldBorder border, double size) {
-                   player.connection.send(new ClientboundSetBorderSizePacket(border));
-               }
-
-               @Override
-                public void onBorderSizeLerping(WorldBorder border, double oldSize, double newSize, long time) {
-                   player.connection.send(new ClientboundSetBorderLerpSizePacket(border));
-               }
-
-               @Override
-                public void onBorderCenterSet(WorldBorder border, double x, double z) {
-                   player.connection.send(new ClientboundSetBorderCenterPacket(border));
-               }
-
-               @Override
-                public void onBorderSetWarningTime(WorldBorder border, int warningTime) {
-                   player.connection.send(new ClientboundSetBorderWarningDelayPacket(border));
-               }
-
-               @Override
-                public void onBorderSetWarningBlocks(WorldBorder border, int warningBlocks) {
-                   player.connection.send(new ClientboundSetBorderWarningDistancePacket(border));
-               }
-
-               @Override
-                public void onBorderSetDamagePerBlock(WorldBorder border, double damagePerBlock) {
-
-               }
-
-               @Override
-                public void onBorderSetDamageSafeZOne(WorldBorder border, double safeZone) {
-
-               }
-            };
-
-            this.dimensionLevel.getWorldBorder().addListener(listener);
-            borderListeners.put(player, listener);
+            
+            if (worldBorderField != null) {
+                worldBorderField.setAccessible(true);
+                WorldBorder oldBorder = (WorldBorder) worldBorderField.get(level);
+                LOGGER.info("Found worldBorder field, replacing {} with {}", 
+                           oldBorder.getClass().getSimpleName(), 
+                           customBorder.getClass().getSimpleName());
+                
+                worldBorderField.set(level, customBorder);
+                
+                // Verify the replacement worked
+                WorldBorder newBorder = level.getWorldBorder();
+                LOGGER.info("World border replacement result - Type: {}, Size: {}", 
+                           newBorder.getClass().getSimpleName(), 
+                           newBorder.getSize());
+            } else {
+                LOGGER.error("Could not find worldBorder field in ServerLevel class hierarchy");
+            }
+            
+        } catch (Exception e) {
+            LOGGER.error("Failed to apply world border workaround", e);
         }
-    }
-
-    private void endBorderSync() {
-        for (Map.Entry<ServerPlayer, BorderChangeListener> entry : borderListeners.entrySet()) {
-            this.dimensionLevel.getWorldBorder().removeListener(entry.getValue());
-        }
-        borderListeners.clear();
     }
 }
