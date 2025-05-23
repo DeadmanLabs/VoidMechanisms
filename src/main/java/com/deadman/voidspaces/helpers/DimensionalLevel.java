@@ -60,13 +60,13 @@ public class DimensionalLevel extends ServerLevel {
             this.customWorldBorder = new DimensionalWorldBorder(this);
             ServerLevel overworld = this.getServer().getLevel(Level.OVERWORLD);
             WorldBorder defaultBorder = overworld.getWorldBorder();
-            // Set up appropriate world border for voidspace dimensions
-            this.customWorldBorder.setCenter(0.0, 0.0);
-            this.customWorldBorder.setSize(50.0); // 50x50 block area for building
+            // Set up appropriate world border for voidspace dimensions - exact chunk 0 boundaries
+            this.customWorldBorder.setCenter(7.5, 7.5);
+            this.customWorldBorder.setSize(16.0); // Exactly chunk 0 size (16x16 blocks)
             this.customWorldBorder.setDamagePerBlock(0.2);
-            this.customWorldBorder.setWarningBlocks(5);
-            this.customWorldBorder.setAbsoluteMaxSize(51); // Prevent expansion beyond 51
-            LOGGER.info("Custom world border initialized: center=(0,0), size=50, damage=0.2, warning=5");
+            this.customWorldBorder.setWarningBlocks(0); // No warning - immediate damage at border
+            this.customWorldBorder.setAbsoluteMaxSize(16); // Prevent expansion beyond chunk size
+            LOGGER.info("Custom world border initialized: center=(7.5,7.5), size=16, damage=0.2, warning=0");
         }
         return this.customWorldBorder;
     }

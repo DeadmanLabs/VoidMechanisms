@@ -76,7 +76,13 @@ public class Dimensional {
             throw new IllegalArgumentException(String.format("Minecraft Server: {} || Owner: {} were null", server, owner));
         }
         this.server = server;
-        this.dimension = ResourceKey.create(Registries.DIMENSION, ResourceLocation.fromNamespaceAndPath(VoidSpaces.MODID, "voidspace_" + dimensionCount));
+        
+        // Find the next available dimension index by checking existing dimensions
+        int nextDimensionIndex = getNextAvailableDimensionIndex(server);
+        this.dimension = ResourceKey.create(Registries.DIMENSION, ResourceLocation.fromNamespaceAndPath(VoidSpaces.MODID, "voidspace_" + nextDimensionIndex));
+        
+        LOGGER.info("Creating new dimension with index {} (dimensionCount was {})", nextDimensionIndex, dimensionCount);
+        
         ServerLevel infiniverseLevel = InfiniverseAPI.get().getOrCreateLevel(this.server, this.dimension, () -> createLevel(this.server, DimensionTypeOptions.FLAT));
         this.dimensionLevel = infiniverseLevel;
         LOGGER.info("New dimensional level type: {} for dimension: {}", infiniverseLevel.getClass().getSimpleName(), this.dimension.location());
@@ -95,7 +101,9 @@ public class Dimensional {
                    testBorder.getCenterZ(), 
                    testBorder.getSize());
         this.owner = owner;
-        dimensionCount++;
+        
+        // Update dimensionCount to be at least the next index + 1
+        dimensionCount = Math.max(dimensionCount, nextDimensionIndex + 1);
         WRAPPERS.put(this.dimension, this);
     }
 
@@ -133,6 +141,33 @@ public class Dimensional {
         for (Dimensional wrapper : WRAPPERS.values()) {
             wrapper.cleanupForSave();
         }
+    }
+    
+    private static int getNextAvailableDimensionIndex(MinecraftServer server) {
+        // Check existing dimensions to find the next available index
+        int maxIndex = -1;
+        
+        // Check for existing voidspace dimensions
+        for (int i = 0; i < 1000; i++) { // Check up to 1000 dimensions (should be more than enough)
+            String dimensionName = "voidspace_" + i;
+            ResourceLocation dimensionLocation = ResourceLocation.fromNamespaceAndPath(VoidSpaces.MODID, dimensionName);
+            ResourceKey<Level> dimensionKey = ResourceKey.create(Registries.DIMENSION, dimensionLocation);
+            
+            ServerLevel existingLevel = server.getLevel(dimensionKey);
+            if (existingLevel != null) {
+                maxIndex = Math.max(maxIndex, i);
+                LOGGER.debug("Found existing dimension: voidspace_{}", i);
+            } else {
+                // Found the first non-existing index, this is our next available index
+                LOGGER.info("Next available dimension index: {} (max existing: {})", i, maxIndex);
+                return i;
+            }
+        }
+        
+        // Fallback: return maxIndex + 1 if somehow we checked all 1000
+        int nextIndex = maxIndex + 1;
+        LOGGER.warn("Checked 1000 dimensions, using fallback index: {}", nextIndex);
+        return nextIndex;
     }
 
     private LevelStem createLevel(MinecraftServer server, DimensionTypeOptions typeOption) {
@@ -246,7 +281,9 @@ public class Dimensional {
             this.ownerReturnDimension = player.level().dimension();
         }
         
-        player.teleportTo(dimensionLevel, 0, -63, 0, null, player.getYRot(), player.getXRot());
+        // Teleport to center of chunk 0 (chunk 0 goes from 0,0 to 15,15, so center is at 7.5,7.5)
+        // We'll use coordinates 7.5, -62, 7.5 to center the player in chunk 0
+        player.teleportTo(dimensionLevel, 7.5, -62, 7.5, null, player.getYRot(), player.getXRot());
         
         // Sync the inherent world border with the player
         this.ensureWorldBorderForPlayer(player);
@@ -612,12 +649,15 @@ public class Dimensional {
             // Create our custom world border
             DimensionalWorldBorder customBorder = new DimensionalWorldBorder(level);
             
-            // Set appropriate values
-            customBorder.setCenter(0.0, 0.0);
-            customBorder.setSize(50.0);
+            // Set appropriate values for chunk 0 boundaries
+            // Chunk 0 goes from 0,0 to 15,15 (16x16 blocks)
+            // World border should be exactly on chunk boundaries, so from 0,0 to 16,16 (16x16 blocks)
+            // Center should be at (7.5, 7.5) with size 16
+            customBorder.setCenter(7.5, 7.5);
+            customBorder.setSize(16.0);
             customBorder.setDamagePerBlock(0.2);
-            customBorder.setWarningBlocks(5);
-            customBorder.setAbsoluteMaxSize(51);
+            customBorder.setWarningBlocks(0);  // No warning blocks - immediate damage at border
+            customBorder.setAbsoluteMaxSize(16);
             
             // Use reflection to replace the worldBorder field in ServerLevel
             Field worldBorderField = null;

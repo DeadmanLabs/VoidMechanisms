@@ -44,15 +44,30 @@ public class Space {
 
         LevelChunk chunk = level.getChunk(chunkPos.x, chunkPos.z);
 
+        // Ensure we scan the ENTIRE chunk from build limit to bottom, excluding bedrock layer at the bottom
+        int minY = level.getMinBuildHeight() + 1; // +1 to skip the bedrock layer at the bottom
+        int maxY = level.getMaxBuildHeight() - 1; // -1 because we use < in the loop
+        
+        LOGGER.info("Scanning chunk {} from Y={} to Y={} (full range excluding bottom bedrock)", chunkPos, minY, maxY + 1);
+
         BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
-        for (int x = chunkPos.getMinBlockX(); x <= chunkPos.getMaxBlockX(); x++) {
-            for (int y = level.getMinBuildHeight(); y < level.getMaxBuildHeight(); y++) {
-                for (int z = chunkPos.getMinBlockZ(); z <= chunkPos.getMaxBlockZ(); z++) {
+        // For chunk 0, we want to scan coordinates (0,0) to (15,15), not the ChunkPos methods which return wrong values
+        int chunkMinX = chunkPos.x * 16;
+        int chunkMaxX = chunkMinX + 15;
+        int chunkMinZ = chunkPos.z * 16;
+        int chunkMaxZ = chunkMinZ + 15;
+        
+        LOGGER.info("Scanning chunk {} coordinates: X({} to {}), Z({} to {})", chunkPos, chunkMinX, chunkMaxX, chunkMinZ, chunkMaxZ);
+        
+        for (int x = chunkMinX; x <= chunkMaxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = chunkMinZ; z <= chunkMaxZ; z++) {
                     mutablePos.set(x, y, z);
                     BlockState blockState = chunk.getBlockState(mutablePos);
-                    if (blockState.isAir() || blockState.getBlock() == Blocks.BEDROCK) {
+                    if (blockState.isAir()) {
                         continue;
                     }
+                    // Don't skip bedrock above the bottom layer - it might be placed by the player
                     CompoundTag blockTag = new CompoundTag();
                     NbtOps nbtOps = NbtOps.INSTANCE;
                     DataResult<Tag> result = BlockState.CODEC.encodeStart(nbtOps, blockState);
@@ -62,19 +77,33 @@ public class Space {
                     contents.blocks.put(mutablePos.immutable(), blockTag);
                     BlockEntity blockEntity = chunk.getBlockEntity(mutablePos);
                     if (blockEntity != null) {
-                        CompoundTag blockEntityTag = blockEntity.saveWithFullMetadata((HolderLookup.Provider)level.registryAccess().lookup(Registries.BLOCK_ENTITY_TYPE).orElseThrow());
+                        CompoundTag blockEntityTag = blockEntity.saveWithFullMetadata(level.registryAccess());
                         contents.blockEntities.put(mutablePos.immutable(), blockEntityTag);
                     }
                 }
             }
         }
 
-        level.getAllEntities().forEach((entity) -> {
+        // Only get entities that are within the specified chunk bounds
+        int minX = chunkPos.x * 16;
+        int maxX = minX + 16; // +16 because AABB max is exclusive and chunk is 16 blocks wide
+        int minZ = chunkPos.z * 16;
+        int maxZ = minZ + 16; // +16 because AABB max is exclusive and chunk is 16 blocks wide
+        
+        net.minecraft.world.phys.AABB chunkBounds = new net.minecraft.world.phys.AABB(
+            minX, level.getMinBuildHeight(), minZ, 
+            maxX, level.getMaxBuildHeight(), maxZ
+        );
+        
+        level.getEntities().get(chunkBounds, (entity) -> {
             CompoundTag entityTag = new CompoundTag();
             if (entity.save(entityTag)) {
                 contents.entities.put(entity, entityTag);
             }
         });
+        
+        LOGGER.info("Extracted {} blocks, {} block entities, {} entities from chunk {}", 
+                   contents.blocks.size(), contents.blockEntities.size(), contents.entities.size(), chunkPos);
 
         return contents;
     }

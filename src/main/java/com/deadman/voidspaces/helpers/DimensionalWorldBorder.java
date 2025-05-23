@@ -31,12 +31,12 @@ public class DimensionalWorldBorder extends WorldBorder {
         if (!initialized) {
             LOGGER.info("DimensionalWorldBorder: Setting initial center to ({}, {})", x, z);
             super.setCenter(x, z);
-            if (x == 0.0 && z == 0.0) {
+            if (x == 7.5 && z == 7.5) {
                 initialized = true;
             }
-        } else if (x != 0.0 || z != 0.0) {
-            LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change center from (0,0) to ({}, {})", x, z);
-            // Ignore external attempts to change our center from (0,0)
+        } else if (x != 7.5 || z != 7.5) {
+            LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change center from (7.5,7.5) to ({}, {})", x, z);
+            // Ignore external attempts to change our center from (7.5,7.5)
         } else {
             super.setCenter(x, z);
         }
@@ -47,12 +47,12 @@ public class DimensionalWorldBorder extends WorldBorder {
         if (!initialized) {
             LOGGER.info("DimensionalWorldBorder: Setting initial size to {}", size);
             super.setSize(size);
-            if (size == 50.0) {
+            if (size == 16.0) {
                 initialized = true;
             }
-        } else if (size != 50.0) {
-            LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change size from 50 to {}", size);
-            // Ignore external attempts to change our size from 50
+        } else if (size != 16.0) {
+            LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change size from 16 to {}", size);
+            // Ignore external attempts to change our size from 16
         } else {
             super.setSize(size);
         }
@@ -60,7 +60,7 @@ public class DimensionalWorldBorder extends WorldBorder {
     
     @Override
     public void setAbsoluteMaxSize(int maxSize) {
-        if (!initialized || maxSize == 51) {
+        if (!initialized || maxSize == 16) {
             LOGGER.info("DimensionalWorldBorder: Setting max size to {}", maxSize);
             super.setAbsoluteMaxSize(maxSize);
         } else {
@@ -80,7 +80,7 @@ public class DimensionalWorldBorder extends WorldBorder {
     
     @Override
     public void setWarningBlocks(int warningBlocks) {
-        if (!initialized || warningBlocks == 5) {
+        if (!initialized || warningBlocks == 0) {
             LOGGER.info("DimensionalWorldBorder: Setting warning blocks to {}", warningBlocks);
             super.setWarningBlocks(warningBlocks);
         } else {
