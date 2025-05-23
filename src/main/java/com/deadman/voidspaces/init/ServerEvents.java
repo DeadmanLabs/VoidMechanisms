@@ -5,6 +5,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,5 +52,11 @@ public class ServerEvents {
                 }
             }
         }
+    }
+    
+    @SubscribeEvent
+    public static void onServerStopping(ServerStoppingEvent event) {
+        LOGGER.info("Server stopping - cleaning up dimensional wrappers to prevent save hang");
+        Dimensional.cleanupAllForSave();
     }
 }

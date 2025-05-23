@@ -127,6 +127,13 @@ public class Dimensional {
     public static Dimensional getWrapper(ResourceKey<Level> key) {
         return WRAPPERS.get(key);
     }
+    
+    public static void cleanupAllForSave() {
+        LOGGER.info("Cleaning up {} dimensional wrappers before save", WRAPPERS.size());
+        for (Dimensional wrapper : WRAPPERS.values()) {
+            wrapper.cleanupForSave();
+        }
+    }
 
     private LevelStem createLevel(MinecraftServer server, DimensionTypeOptions typeOption) {
         DynamicOps<Tag> ops = RegistryOps.create(NbtOps.INSTANCE, server.registryAccess());
@@ -252,6 +259,13 @@ public class Dimensional {
     }
 
     public void teleportOut(ServerPlayer player) {
+        // Remove border listener first to prevent save issues
+        if (borderListeners.containsKey(player)) {
+            this.dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));
+            borderListeners.remove(player);
+            LOGGER.info("Removed border change listener for player: {}", player.getName().getString());
+        }
+        
         // Try to get return position from memory maps first, then from Data Attachments
         BlockPos returnPos = returnPositions.get(player);
         ResourceKey<Level> returnDimension = returnDimensions.get(player);
@@ -310,13 +324,6 @@ public class Dimensional {
         this.machine = Space.extractContents(this.dimensionLevel, new ChunkPos(0, 0));
         returnPositions.remove(player);
         returnDimensions.remove(player);
-        
-        // Remove border listener
-        if (borderListeners.containsKey(player)) {
-            this.dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));
-            borderListeners.remove(player);
-            LOGGER.info("Removed border change listener for player: {}", player.getName().getString());
-        }
         
         // Clear Data Attachments
         DataAttachments.ReturnPositionData returnData = player.getData(DataAttachments.RETURN_POSITION);
@@ -573,6 +580,27 @@ public class Dimensional {
         this.dimensionLevel.getEntities().get(chunkBoundingBox, entity -> entity.remove(Entity.RemovalReason.DISCARDED));
         this.machine = new SpaceContents();
         chunk.setUnsaved(true);
+    }
+    
+    public void cleanupForSave() {
+        // Remove all border listeners to prevent save hang
+        for (Map.Entry<ServerPlayer, BorderChangeListener> entry : borderListeners.entrySet()) {
+            try {
+                this.dimensionLevel.getWorldBorder().removeListener(entry.getValue());
+                LOGGER.info("Removed border listener for player {} during save cleanup", entry.getKey().getName().getString());
+            } catch (Exception e) {
+                LOGGER.warn("Failed to remove border listener for player {} during save cleanup", entry.getKey().getName().getString(), e);
+            }
+        }
+        borderListeners.clear();
+        
+        // Force save the dimension before world save
+        try {
+            this.dimensionLevel.save(null, false, false);
+            LOGGER.info("Force saved void dimension {} before world save", this.dimension.location());
+        } catch (Exception e) {
+            LOGGER.warn("Failed to force save void dimension {} before world save", this.dimension.location(), e);
+        }
     }
 
     // Border sync is now handled inherently by DimensionalLevel
