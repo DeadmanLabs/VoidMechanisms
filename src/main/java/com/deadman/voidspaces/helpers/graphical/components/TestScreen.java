@@ -32,22 +32,34 @@ public class TestScreen extends Screen {
 
     @Override
     protected void init() {
-        // Initialize the vertical progress bar
-        verticalProgressBar = new ProgressBar(
-                this.width / 2 - 8, // Center horizontally
-                this.height / 2 - 60, // Position above the horizontal bar
-                16, 100, // Width and height (matching CoFH's energy bar)
-                false // Vertical orientation
-        );
+        // Initialize the vertical progress bar (or reposition if it exists)
+        if (verticalProgressBar == null) {
+            verticalProgressBar = new ProgressBar(
+                    this.width / 2 - 8, // Center horizontally
+                    this.height / 2 - 60, // Position above the horizontal bar
+                    16, Math.min(100, this.height / 3), // Width and height - scale height with window
+                    false // Vertical orientation
+            );
+            verticalProgressBar.setProgress(progress);
+        } else {
+            verticalProgressBar.setPosition(this.width / 2 - 8, this.height / 2 - 60);
+            verticalProgressBar.setSize(16, Math.min(100, this.height / 3)); // Scale with window
+        }
         addRenderableWidget(verticalProgressBar);
 
-        // Initialize the horizontal progress bar
-        horizontalProgressBar = new ProgressBar(
-                this.width / 2 - 50, // Center horizontally
-                this.height / 2, // Position below the vertical bar
-                64, 16, // Width and height
-                true // Horizontal orientation
-        );
+        // Initialize the horizontal progress bar (or reposition if it exists)
+        if (horizontalProgressBar == null) {
+            horizontalProgressBar = new ProgressBar(
+                    this.width / 2 - 50, // Center horizontally
+                    this.height / 2, // Position below the vertical bar
+                    Math.min(100, this.width / 6), 16, // Width and height - scale width with window
+                    true // Horizontal orientation
+            );
+            horizontalProgressBar.setProgress(progress);
+        } else {
+            horizontalProgressBar.setPosition(this.width / 2 - 50, this.height / 2);
+            horizontalProgressBar.setSize(Math.min(100, this.width / 6), 16); // Scale with window
+        }
         addRenderableWidget(horizontalProgressBar);
 
         // Add a button to increase the progress
@@ -55,11 +67,17 @@ public class TestScreen extends Screen {
                 .bounds(this.width / 2 - 50, this.height / 2 + 30, 100, 20) // Position and size
                 .build());
 
-        listTest = new ItemFluidList(
-                this.width / 2 + 60,
-                this.height / 2 - 60,
-                100, 120
-        );
+        // Initialize the item/fluid list (or reposition if it exists)
+        if (listTest == null) {
+            listTest = new ItemFluidList(
+                    this.width / 2 + 60,
+                    this.height / 2 - 60,
+                    Math.min(150, this.width / 4), Math.min(120, this.height / 3) // Scale with window
+            );
+        } else {
+            listTest.setPosition(this.width / 2 + 60, this.height / 2 - 60);
+            listTest.setSize(Math.min(150, this.width / 4), Math.min(120, this.height / 3)); // Scale with window
+        }
         addRenderableWidget(listTest);
 
         addRenderableWidget(Button.builder(Component.literal("Add Item"), button -> addItem())
@@ -75,9 +93,17 @@ public class TestScreen extends Screen {
                 .bounds(this.width / 2 + 110, this.height / 2 + 100, 50, 20)
                 .build());
 
-        chartTest = new LineChart(
-                20, this.height / 2 - 50, 100, 50, 32
-        );
+        // Initialize the chart (or reposition if it exists)
+        if (chartTest == null) {
+            chartTest = new LineChart(
+                    20, this.height / 2 - 50, 
+                    Math.min(150, this.width / 4), Math.min(80, this.height / 4), // Scale with window
+                    32
+            );
+        } else {
+            chartTest.setPosition(20, this.height / 2 - 50);
+            chartTest.setSize(Math.min(150, this.width / 4), Math.min(80, this.height / 4)); // Scale with window
+        }
         addRenderableWidget(chartTest);
 
         addRenderableWidget(Button.builder(Component.literal("Add Data"), button -> addChartData())
@@ -105,12 +131,16 @@ public class TestScreen extends Screen {
     }
 
     private void addChartData() {
-        double randomValue = 1 + random.nextDouble() * 99;
-        chartTest.addDatapoint(randomValue);
+        if (chartTest != null) {
+            double randomValue = 1 + random.nextDouble() * 99;
+            chartTest.addDatapoint(randomValue);
+        }
     }
 
     private void clearChartData() {
-        chartTest.clearData();
+        if (chartTest != null) {
+            chartTest.clearData();
+        }
     }
 
     private void increaseProgress() {

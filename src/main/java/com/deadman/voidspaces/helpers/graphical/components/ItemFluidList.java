@@ -29,6 +29,16 @@ public class ItemFluidList extends AbstractWidget {
         this.font = Minecraft.getInstance().font;
     }
 
+    public void setPosition(int x, int y) {
+        this.setX(x);
+        this.setY(y);
+    }
+
+    public void setSize(int width, int height) {
+        this.width = width;
+        this.height = height;
+    }
+
     public void addItem(ItemStack itemStack, int count) {
         String key = itemStack.getItem().getDescriptionId(); // Use unique ID for merging
         itemEntries.merge(key, new Entry(itemStack, count), Entry::merge);

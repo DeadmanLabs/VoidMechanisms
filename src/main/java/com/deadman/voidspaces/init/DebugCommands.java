@@ -187,6 +187,8 @@ public class DebugCommands {
                 // Analyze blocks
                 player.sendSystemMessage(Component.literal("§a--- BLOCKS (" + contents.blocks.size() + " total) ---"));
                 Map<String, Integer> blockCounts = new HashMap<>();
+                Map<String, Integer> fluidSourceCounts = new HashMap<>();
+                Map<String, Integer> fluidFlowingCounts = new HashMap<>();
                 
                 for (Map.Entry<BlockPos, CompoundTag> entry : contents.blocks.entrySet()) {
                     BlockPos pos = entry.getKey();
@@ -201,10 +203,28 @@ public class DebugCommands {
                         }
                     }
                     
-                    blockCounts.put(blockName, blockCounts.getOrDefault(blockName, 0) + 1);
+                    // Check if this is a fluid block
+                    if (blockTag.getBoolean("IsFluid")) {
+                        String fluidType = blockTag.getString("FluidType");
+                        boolean isSource = blockTag.getBoolean("IsSource");
+                        
+                        if (isSource) {
+                            fluidSourceCounts.put(fluidType, fluidSourceCounts.getOrDefault(fluidType, 0) + 1);
+                        } else {
+                            fluidFlowingCounts.put(fluidType, fluidFlowingCounts.getOrDefault(fluidType, 0) + 1);
+                        }
+                    } else {
+                        blockCounts.put(blockName, blockCounts.getOrDefault(blockName, 0) + 1);
+                    }
                     
                     if (contents.blocks.size() <= 20) { // Only show individual positions if there aren't too many
-                        player.sendSystemMessage(Component.literal("  §7" + pos.getX() + "," + pos.getY() + "," + pos.getZ() + ": §f" + blockName));
+                        String displayName = blockName;
+                        if (blockTag.getBoolean("IsFluid")) {
+                            String fluidType = blockTag.getString("FluidType");
+                            boolean isSource = blockTag.getBoolean("IsSource");
+                            displayName = fluidType + (isSource ? " §9(source)" : " §3(flowing)");
+                        }
+                        player.sendSystemMessage(Component.literal("  §7" + pos.getX() + "," + pos.getY() + "," + pos.getZ() + ": §f" + displayName));
                     }
                 }
                 
@@ -213,6 +233,12 @@ public class DebugCommands {
                     player.sendSystemMessage(Component.literal("§7Block Summary:"));
                     for (Map.Entry<String, Integer> entry : blockCounts.entrySet()) {
                         player.sendSystemMessage(Component.literal("  §f" + entry.getKey() + ": §e" + entry.getValue()));
+                    }
+                    for (Map.Entry<String, Integer> entry : fluidSourceCounts.entrySet()) {
+                        player.sendSystemMessage(Component.literal("  §9" + entry.getKey() + " (source): §e" + entry.getValue()));
+                    }
+                    for (Map.Entry<String, Integer> entry : fluidFlowingCounts.entrySet()) {
+                        player.sendSystemMessage(Component.literal("  §3" + entry.getKey() + " (flowing): §e" + entry.getValue()));
                     }
                 }
                 
@@ -340,8 +366,26 @@ public class DebugCommands {
                     try {
                         ChunkPos chunkPos = new ChunkPos(0, 0);
                         Space.SpaceContents contents = Space.extractContents(dimensionLevel, chunkPos);
-                        String stats = String.format(" §7[%d blocks, %d entities, %d block entities]", 
-                                                    contents.blocks.size(), 
+                        
+                        // Count fluid blocks separately
+                        int solidBlocks = 0;
+                        int fluidSources = 0;
+                        int fluidFlowing = 0;
+                        
+                        for (CompoundTag blockTag : contents.blocks.values()) {
+                            if (blockTag.getBoolean("IsFluid")) {
+                                if (blockTag.getBoolean("IsSource")) {
+                                    fluidSources++;
+                                } else {
+                                    fluidFlowing++;
+                                }
+                            } else {
+                                solidBlocks++;
+                            }
+                        }
+                        
+                        String stats = String.format(" §7[%d solid, %d fluid sources, %d fluid flowing, %d entities, %d block entities]", 
+                                                    solidBlocks, fluidSources, fluidFlowing,
                                                     contents.entities.size(), 
                                                     contents.blockEntities.size());
                         player.sendSystemMessage(Component.literal("    " + stats));

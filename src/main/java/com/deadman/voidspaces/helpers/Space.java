@@ -74,6 +74,15 @@ public class Space {
                     result.resultOrPartial(error -> {
                         throw new IllegalStateException("Failed to serialize BlockState: " + error);
                     }).ifPresent(serializedTag -> blockTag.put("BlockState", serializedTag));
+                    
+                    // Add fluid state information
+                    FluidState fluidState = blockState.getFluidState();
+                    if (!fluidState.isEmpty()) {
+                        blockTag.putBoolean("IsFluid", true);
+                        blockTag.putBoolean("IsSource", fluidState.isSource());
+                        blockTag.putString("FluidType", fluidState.getType().toString());
+                    }
+                    
                     contents.blocks.put(mutablePos.immutable(), blockTag);
                     BlockEntity blockEntity = chunk.getBlockEntity(mutablePos);
                     if (blockEntity != null) {

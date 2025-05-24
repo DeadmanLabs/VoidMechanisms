@@ -24,6 +24,16 @@ public class LineChart extends AbstractWidget {
         this.font = Minecraft.getInstance().font;
     }
 
+    public void setPosition(int x, int y) {
+        this.setX(x);
+        this.setY(y);
+    }
+
+    public void setSize(int width, int height) {
+        this.width = width;
+        this.height = height;
+    }
+
     public void addDatapoint(double value) {
         if (dataPoints.size() >= maxDataPoints) {
             dataPoints.removeFirst();
