@@ -1,0 +1,9 @@
+{
+  "parent": "minecraft:block/hopper_side",
+  "textures": {
+    "particle": "voidspaces:block/voidhopper",
+    "top": "voidspaces:block/voidhopper",
+    "side": "voidspaces:block/voidhopper",
+    "inside": "voidspaces:block/voidhopper"
+  }
+}

@@ -29,6 +29,8 @@ public class Tabs {
                 output.accept(new ItemStack(ModBlocks.VOID_EXTRACTOR.get().asItem(), 1));
                 output.accept(new ItemStack(ModBlocks.VOID_ACCELERATOR.get().asItem(), 1));
                 output.accept(new ItemStack(ModBlocks.VOID_STABILIZER.get().asItem(), 1));
+                output.accept(new ItemStack(ModBlocks.VOID_HOPPER.get().asItem(), 1));
+                output.accept(new ItemStack(ModBlocks.VOID_DROPPER.get().asItem(), 1));
                 output.accept(ModItems.VOID_ALLOY.get());
                 output.accept(ModItems.VOID_BLUEPRINT.get());
                 output.accept(ModItems.VOID_CARD.get());

@@ -8,6 +8,7 @@ import javax.annotation.Nullable;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.world.level.ChunkPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,7 +54,12 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
     //private FluidStack fluidStorage = new FluidStack(20000);
     public BlockPos location;
 
-    private NonNullList<ItemStack> stacks = NonNullList.<ItemStack>withSize(1, ItemStack.EMPTY);
+    // 9 input slots + 9 output slots = 18 total slots
+    private NonNullList<ItemStack> stacks = NonNullList.<ItemStack>withSize(18, ItemStack.EMPTY);
+    public static final int INPUT_SLOT_START = 0;
+    public static final int INPUT_SLOT_COUNT = 9;
+    public static final int OUTPUT_SLOT_START = 9;
+    public static final int OUTPUT_SLOT_COUNT = 9;
     private final SidedInvWrapper handler = new SidedInvWrapper(this, null);
 
     public EngineEntity(BlockPos pos, BlockState state) {
@@ -74,7 +80,126 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
     }
 
     public static void tick(Level level, BlockPos pos, BlockState state, EngineEntity blockEntity) {
-
+        if (!level.isClientSide && blockEntity.dimension != null) {
+            // Transfer items from input slots to VoidHoppers in the dimension
+            blockEntity.transferItemsToVoidHoppers();
+            
+            // Transfer items from VoidDroppers to output slots
+            blockEntity.transferItemsFromVoidDroppers();
+        }
+    }
+    
+    private void transferItemsToVoidHoppers() {
+        ServerLevel dimensionLevel = this.level.getServer().getLevel(this.dimension.dimension);
+        if (dimensionLevel == null) return;
+        
+        // Check input slots for items to transfer
+        for (int i = INPUT_SLOT_START; i < INPUT_SLOT_START + INPUT_SLOT_COUNT; i++) {
+            ItemStack inputStack = this.stacks.get(i);
+            if (!inputStack.isEmpty()) {
+                // Find a VoidHopper in the dimension that wants this item
+                List<VoidHopperEntity> voidHoppers = findVoidHoppersInDimension(dimensionLevel);
+                for (VoidHopperEntity hopper : voidHoppers) {
+                    if (hopper.acceptsItem(inputStack)) {
+                        // Transfer the item to the hopper's visual inventory
+                        if (addItemToVoidHopper(hopper, inputStack)) {
+                            this.stacks.set(i, ItemStack.EMPTY);
+                            this.setChanged();
+                            LOGGER.info("Transferred {} to VoidHopper at {}", inputStack.getDisplayName().getString(), hopper.getBlockPos());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private void transferItemsFromVoidDroppers() {
+        ServerLevel dimensionLevel = this.level.getServer().getLevel(this.dimension.dimension);
+        if (dimensionLevel == null) return;
+        
+        List<VoidDropperEntity> voidDroppers = findVoidDroppersInDimension(dimensionLevel);
+        for (VoidDropperEntity dropper : voidDroppers) {
+            // Try to extract items from dropper to output slots
+            List<ItemStack> availableTypes = dropper.getStoredItemTypes();
+            for (ItemStack type : availableTypes) {
+                // Find an empty output slot
+                for (int i = OUTPUT_SLOT_START; i < OUTPUT_SLOT_START + OUTPUT_SLOT_COUNT; i++) {
+                    ItemStack outputStack = this.stacks.get(i);
+                    if (outputStack.isEmpty()) {
+                        // Extract up to a full stack
+                        ItemStack extracted = dropper.extractFromInfiniteStorage(type, type.getMaxStackSize());
+                        if (!extracted.isEmpty()) {
+                            this.stacks.set(i, extracted);
+                            this.setChanged();
+                            LOGGER.info("Extracted {} from VoidDropper at {}", extracted.getDisplayName().getString(), dropper.getBlockPos());
+                            break;
+                        }
+                    } else if (ItemStack.isSameItemSameComponents(outputStack, type) && outputStack.getCount() < outputStack.getMaxStackSize()) {
+                        // Add to existing stack
+                        int spaceLeft = outputStack.getMaxStackSize() - outputStack.getCount();
+                        ItemStack extracted = dropper.extractFromInfiniteStorage(type, spaceLeft);
+                        if (!extracted.isEmpty()) {
+                            outputStack.grow(extracted.getCount());
+                            this.setChanged();
+                            LOGGER.info("Added {} to existing stack in output slot", extracted.getDisplayName().getString());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private List<VoidHopperEntity> findVoidHoppersInDimension(ServerLevel dimensionLevel) {
+        List<VoidHopperEntity> hoppers = new ArrayList<>();
+        ChunkPos chunkPos = new ChunkPos(0, 0);
+        
+        for (int x = chunkPos.x * 16; x <= chunkPos.x * 16 + 15; x++) {
+            for (int y = dimensionLevel.getMinBuildHeight(); y < dimensionLevel.getMaxBuildHeight(); y++) {
+                for (int z = chunkPos.z * 16; z <= chunkPos.z * 16 + 15; z++) {
+                    BlockPos pos = new BlockPos(x, y, z);
+                    if (dimensionLevel.getBlockEntity(pos) instanceof VoidHopperEntity hopper) {
+                        hoppers.add(hopper);
+                    }
+                }
+            }
+        }
+        return hoppers;
+    }
+    
+    private List<VoidDropperEntity> findVoidDroppersInDimension(ServerLevel dimensionLevel) {
+        List<VoidDropperEntity> droppers = new ArrayList<>();
+        ChunkPos chunkPos = new ChunkPos(0, 0);
+        
+        for (int x = chunkPos.x * 16; x <= chunkPos.x * 16 + 15; x++) {
+            for (int y = dimensionLevel.getMinBuildHeight(); y < dimensionLevel.getMaxBuildHeight(); y++) {
+                for (int z = chunkPos.z * 16; z <= chunkPos.z * 16 + 15; z++) {
+                    BlockPos pos = new BlockPos(x, y, z);
+                    if (dimensionLevel.getBlockEntity(pos) instanceof VoidDropperEntity dropper) {
+                        droppers.add(dropper);
+                    }
+                }
+            }
+        }
+        return droppers;
+    }
+    
+    private boolean addItemToVoidHopper(VoidHopperEntity hopper, ItemStack stack) {
+        // Try to add to the hopper's visual inventory
+        for (int i = 0; i < hopper.getContainerSize(); i++) {
+            ItemStack slotStack = hopper.getItem(i);
+            if (slotStack.isEmpty()) {
+                hopper.setItem(i, stack.copy());
+                return true;
+            } else if (ItemStack.isSameItemSameComponents(slotStack, stack) && slotStack.getCount() < slotStack.getMaxStackSize()) {
+                int spaceLeft = slotStack.getMaxStackSize() - slotStack.getCount();
+                int toAdd = Math.min(spaceLeft, stack.getCount());
+                slotStack.grow(toAdd);
+                return true;
+            }
+        }
+        return false;
     }
 
     //private int getTotalFluidVolume()
@@ -289,12 +414,49 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
 
     @Override
     public boolean canPlaceItem(int index, ItemStack stack) {
-        return true;
+        // Only allow items in input slots, and only if they match the void hopper filter
+        if (index >= INPUT_SLOT_START && index < INPUT_SLOT_START + INPUT_SLOT_COUNT) {
+            return isItemAcceptedByVoidHopper(stack);
+        }
+        return false; // Don't allow items in output slots
+    }
+    
+    public boolean isItemAcceptedByVoidHopper(ItemStack stack) {
+        if (this.dimension == null) return false;
+        
+        // Check all VoidHoppers in the dimension to see if any accept this item
+        ServerLevel dimensionLevel = this.level.getServer().getLevel(this.dimension.dimension);
+        if (dimensionLevel == null) return false;
+        
+        // Scan chunk 0 for VoidHoppers
+        ChunkPos chunkPos = new ChunkPos(0, 0);
+        for (int x = chunkPos.x * 16; x <= chunkPos.x * 16 + 15; x++) {
+            for (int y = dimensionLevel.getMinBuildHeight(); y < dimensionLevel.getMaxBuildHeight(); y++) {
+                for (int z = chunkPos.z * 16; z <= chunkPos.z * 16 + 15; z++) {
+                    BlockPos pos = new BlockPos(x, y, z);
+                    if (dimensionLevel.getBlockEntity(pos) instanceof VoidHopperEntity voidHopper) {
+                        if (voidHopper.acceptsItem(stack)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        return false; // No VoidHopper accepts this item
     }
 
     @Override
     public int[] getSlotsForFace(Direction side) {
-        return IntStream.range(0, this.getContainerSize()).toArray();
+        // Return input slots for insertion, output slots for extraction
+        if (side == Direction.UP || side == Direction.NORTH || side == Direction.SOUTH || side == Direction.EAST || side == Direction.WEST) {
+            // Input slots for insertion
+            return IntStream.range(INPUT_SLOT_START, INPUT_SLOT_START + INPUT_SLOT_COUNT).toArray();
+        } else if (side == Direction.DOWN) {
+            // Output slots for extraction
+            return IntStream.range(OUTPUT_SLOT_START, OUTPUT_SLOT_START + OUTPUT_SLOT_COUNT).toArray();
+        }
+        return new int[0];
     }
 
     @Override
@@ -304,11 +466,8 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
 
     @Override
     public boolean canTakeItemThroughFace(int index, ItemStack stack, Direction direction) {
-        if (index == 0)
-            return false;
-        if (index == 1)
-            return false;
-        return true;
+        // Only allow extraction from output slots
+        return index >= OUTPUT_SLOT_START && index < OUTPUT_SLOT_START + OUTPUT_SLOT_COUNT;
     }
 
     public SidedInvWrapper getItemHandler() {

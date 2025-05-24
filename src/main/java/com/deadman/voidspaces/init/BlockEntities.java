@@ -32,4 +32,12 @@ public class BlockEntities {
             "stabilizer_block_entity",
             () -> BlockEntityType.Builder.of(StabilizerEntity::new, ModBlocks.VOID_STABILIZER.get()).build(null)
     );
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<VoidHopperEntity>> VOID_HOPPER_BLOCK_ENTITY = REGISTRY.register(
+            "void_hopper_block_entity",
+            () -> BlockEntityType.Builder.of(VoidHopperEntity::new, ModBlocks.VOID_HOPPER.get()).build(null)
+    );
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<VoidDropperEntity>> VOID_DROPPER_BLOCK_ENTITY = REGISTRY.register(
+            "void_dropper_block_entity",
+            () -> BlockEntityType.Builder.of(VoidDropperEntity::new, ModBlocks.VOID_DROPPER.get()).build(null)
+    );
 }

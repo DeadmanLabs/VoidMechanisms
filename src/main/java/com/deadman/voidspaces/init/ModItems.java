@@ -52,4 +52,12 @@ public class ModItems {
             "void_frame",
             VoidFrame::new
     );
+    public static final DeferredItem<BlockItem> VOID_HOPPER = REGISTRY.register(
+            "void_hopper",
+            () -> new BlockItem(ModBlocks.VOID_HOPPER.get(), new Item.Properties())
+    );
+    public static final DeferredItem<BlockItem> VOID_DROPPER = REGISTRY.register(
+            "void_dropper",
+            () -> new BlockItem(ModBlocks.VOID_DROPPER.get(), new Item.Properties())
+    );
 }

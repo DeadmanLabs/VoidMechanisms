@@ -19,6 +19,10 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import com.deadman.voidspaces.block.entity.VoidHopperEntity;
+import com.deadman.voidspaces.block.entity.VoidDropperEntity;
+import com.deadman.voidspaces.block.VoidHopper;
+import com.deadman.voidspaces.block.VoidDropper;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
@@ -67,6 +71,12 @@ public class Space {
                     if (blockState.isAir()) {
                         continue;
                     }
+                    
+                    // Skip VoidHopper and VoidDropper blocks from space analysis
+                    if (blockState.getBlock() instanceof VoidHopper || blockState.getBlock() instanceof VoidDropper) {
+                        LOGGER.debug("Skipping {} block at {} from space analysis", blockState.getBlock().getClass().getSimpleName(), mutablePos);
+                        continue;
+                    }
                     // Don't skip bedrock above the bottom layer - it might be placed by the player
                     CompoundTag blockTag = new CompoundTag();
                     NbtOps nbtOps = NbtOps.INSTANCE;
@@ -86,6 +96,11 @@ public class Space {
                     contents.blocks.put(mutablePos.immutable(), blockTag);
                     BlockEntity blockEntity = chunk.getBlockEntity(mutablePos);
                     if (blockEntity != null) {
+                        // Skip VoidHopper and VoidDropper entities from space analysis
+                        if (blockEntity instanceof VoidHopperEntity || blockEntity instanceof VoidDropperEntity) {
+                            LOGGER.debug("Skipping {} at {} from space analysis", blockEntity.getClass().getSimpleName(), mutablePos);
+                            continue;
+                        }
                         CompoundTag blockEntityTag = blockEntity.saveWithFullMetadata(level.registryAccess());
                         contents.blockEntities.put(mutablePos.immutable(), blockEntityTag);
                     }
