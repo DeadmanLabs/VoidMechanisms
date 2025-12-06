@@ -60,4 +60,8 @@ public class ModItems {
             "void_dropper",
             () -> new BlockItem(ModBlocks.VOID_DROPPER.get(), new Item.Properties())
     );
+    public static final DeferredItem<BlockItem> VOID_POWER_CONNECTOR = REGISTRY.register(
+            "void_power_connector",
+            () -> new BlockItem(ModBlocks.VOID_POWER_CONNECTOR.get(), new Item.Properties())
+    );
 }

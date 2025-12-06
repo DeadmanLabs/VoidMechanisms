@@ -288,11 +288,7 @@ public class Dimensional {
         // Sync the inherent world border with the player
         this.ensureWorldBorderForPlayer(player);
         
-        if (player.getUUID().equals(this.owner)) {
-            this.setBuilderMode(player, true);
-        } else {
-            LOGGER.info("Teleported player is not the owner!");
-        }
+        this.setBuilderMode(player, true);
     }
 
     public void teleportOut(ServerPlayer player) {
@@ -353,11 +349,7 @@ public class Dimensional {
             // Same dimension, just teleport normally
             player.teleportTo(returnPos.getX(), returnPos.getY(), returnPos.getZ());
         }
-        if (player.getUUID().equals(this.owner)) {
-            this.setBuilderMode(player, false);
-        } else {
-            LOGGER.info("Teleported player is not the owner!");
-        }
+        this.setBuilderMode(player, false);
         this.machine = Space.extractContents(this.dimensionLevel, new ChunkPos(0, 0));
         returnPositions.remove(player);
         returnDimensions.remove(player);
@@ -535,11 +527,12 @@ public class Dimensional {
 
     private void setBuilderMode(ServerPlayer player, boolean enabled) {
         if (enabled) {
-            // Save the original game mode and inventory
+            // Save complete player data (includes all modded inventories like Curios, Cosmetic Armor, etc.)
+            CompoundTag playerData = new CompoundTag();
+            player.saveWithoutId(playerData);
+            player.getPersistentData().put("VoidSpaces_SavedPlayerData", playerData);
             player.getPersistentData().putString("VoidSpaces_OriginalGameMode", player.gameMode.getGameModeForPlayer().getName());
-            ListTag inventoryTag = player.getInventory().save(new ListTag());
-            player.getPersistentData().put("VoidSpaces_SavedInventory", inventoryTag);
-            
+
             // Clear inventory and set creative mode
             player.getInventory().clearContent();
             player.setGameMode(GameType.CREATIVE);
@@ -547,15 +540,40 @@ public class Dimensional {
             player.getAbilities().flying = true;
             player.getAbilities().invulnerable = true;
             player.getAbilities().mayBuild = true;
-            
+
             // Prevent dimension travel
             player.getPersistentData().putBoolean("VoidSpaces_InDimension", true);
-            
-            LOGGER.info("Enabled builder mode for player: {}", player.getName().getString());
+
+            LOGGER.info("Enabled builder mode for player: {} (full NBT saved)", player.getName().getString());
         } else {
-            // Restore original game mode and inventory
+            // Save current position before restoring NBT (so we don't teleport back)
+            double x = player.getX();
+            double y = player.getY();
+            double z = player.getZ();
+            float yRot = player.getYRot();
+            float xRot = player.getXRot();
+
+            // Read game mode BEFORE load wipes persistent data
             String originalGameMode = player.getPersistentData().getString("VoidSpaces_OriginalGameMode");
-            GameType gameType = GameType.SURVIVAL; // Default fallback
+
+            // Clear any items obtained in the dimension
+            player.getInventory().clearContent();
+
+            // Restore complete player data (includes all modded inventories)
+            if (player.getPersistentData().contains("VoidSpaces_SavedPlayerData")) {
+                CompoundTag playerData = player.getPersistentData().getCompound("VoidSpaces_SavedPlayerData");
+                player.load(playerData);
+                // Note: persistent data is now overwritten by load, but we already have originalGameMode
+                LOGGER.info("Restored full player NBT for: {}", player.getName().getString());
+            }
+
+            // Restore position (don't let NBT teleport us back to entry location)
+            player.setPos(x, y, z);
+            player.setYRot(yRot);
+            player.setXRot(xRot);
+
+            // Restore game mode using the value we read before load
+            GameType gameType = GameType.SURVIVAL;
             try {
                 if (!originalGameMode.isEmpty()) {
                     gameType = GameType.byName(originalGameMode, GameType.SURVIVAL);
@@ -563,26 +581,15 @@ public class Dimensional {
             } catch (Exception e) {
                 LOGGER.warn("Failed to restore game mode: {}", originalGameMode);
             }
-            
             player.setGameMode(gameType);
             player.getAbilities().instabuild = false;
             player.getAbilities().flying = false;
             player.getAbilities().invulnerable = false;
-            
-            // Clear any items obtained in the dimension
-            player.getInventory().clearContent();
-            
-            // Restore saved inventory
-            if (player.getPersistentData().contains("VoidSpaces_SavedInventory")) {
-                ListTag inventoryTag = player.getPersistentData().getList("VoidSpaces_SavedInventory", 10);
-                player.getInventory().load(inventoryTag);
-                player.getPersistentData().remove("VoidSpaces_SavedInventory");
-            }
-            
+
             // Clear dimension flag
             player.getPersistentData().remove("VoidSpaces_InDimension");
             player.getPersistentData().remove("VoidSpaces_OriginalGameMode");
-            
+
             LOGGER.info("Disabled builder mode for player: {}", player.getName().getString());
         }
         player.onUpdateAbilities();

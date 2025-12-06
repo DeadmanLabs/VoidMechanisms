@@ -1,0 +1,6 @@
+{
+  "variants": {
+    "powered=false": { "model": "voidspaces:block/void_engine" },
+    "powered=true": { "model": "voidspaces:block/void_engine" }
+  }
+}

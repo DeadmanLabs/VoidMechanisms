@@ -250,7 +250,41 @@ public class DebugCommands {
                     
                     String beType = beTag.getString("id");
                     player.sendSystemMessage(Component.literal("  §7" + pos.getX() + "," + pos.getY() + "," + pos.getZ() + ": §b" + beType));
-                    
+
+                    // Check for spawner entity data
+                    if (beType.equals("minecraft:mob_spawner") || beType.contains("spawner")) {
+                        // Check SpawnData which contains the current entity type
+                        if (beTag.contains("SpawnData")) {
+                            CompoundTag spawnData = beTag.getCompound("SpawnData");
+                            if (spawnData.contains("entity")) {
+                                CompoundTag entityData = spawnData.getCompound("entity");
+                                if (entityData.contains("id")) {
+                                    String spawnEntityType = entityData.getString("id");
+                                    player.sendSystemMessage(Component.literal("    §eSpawns: " + spawnEntityType));
+                                }
+                            }
+                        }
+                        // Also check SpawnPotentials for multiple entity types
+                        if (beTag.contains("SpawnPotentials")) {
+                            ListTag potentials = beTag.getList("SpawnPotentials", 10);
+                            if (potentials.size() > 1) {
+                                player.sendSystemMessage(Component.literal("    §7Spawn Potentials:"));
+                                for (int p = 0; p < potentials.size(); p++) {
+                                    CompoundTag potential = potentials.getCompound(p);
+                                    if (potential.contains("data")) {
+                                        CompoundTag data = potential.getCompound("data");
+                                        if (data.contains("entity")) {
+                                            CompoundTag entityTag = data.getCompound("entity");
+                                            String entityId = entityTag.getString("id");
+                                            int weight = potential.getInt("weight");
+                                            player.sendSystemMessage(Component.literal("      §f" + entityId + " §7(weight: " + weight + ")"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Analyze inventory contents if it has items
                     if (beTag.contains("Items")) {
                         ListTag itemsTag = beTag.getList("Items", 10);

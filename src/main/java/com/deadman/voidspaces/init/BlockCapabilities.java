@@ -23,6 +23,10 @@ import org.slf4j.LoggerFactory;
 public class BlockCapabilities {
     @SubscribeEvent
     public static void registerCapabilities(RegisterCapabilitiesEvent event) {
-        
+        event.registerBlockEntity(
+            Capabilities.EnergyStorage.BLOCK,
+            BlockEntities.VOID_POWER_CONNECTOR_ENTITY.get(),
+            (be, side) -> be.getEnergyStorage()
+        );
     }
 }

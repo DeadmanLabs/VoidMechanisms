@@ -1,0 +1,5 @@
+{
+  "variants": {
+    "": { "model": "voidspaces:block/void_power_connector" }
+  }
+}

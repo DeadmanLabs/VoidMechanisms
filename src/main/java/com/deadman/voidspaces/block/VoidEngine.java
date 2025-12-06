@@ -130,7 +130,13 @@ public class VoidEngine extends Block implements EntityBlock {
 
     @Override
     public InteractionResult useWithoutItem(BlockState state, Level world, BlockPos pos, Player player, BlockHitResult hit) {
-        super.useWithoutItem(state, world, pos, player, hit);
+        if (!world.isClientSide && player instanceof ServerPlayer serverPlayer) {
+            if (world.getBlockEntity(pos) instanceof EngineEntity engineEntity) {
+                if (engineEntity.getDimension() != null) {
+                    engineEntity.teleportIn(serverPlayer);
+                }
+            }
+        }
         return InteractionResult.sidedSuccess(world.isClientSide);
     }
 

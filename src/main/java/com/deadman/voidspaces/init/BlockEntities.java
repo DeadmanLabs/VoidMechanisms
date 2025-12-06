@@ -40,4 +40,8 @@ public class BlockEntities {
             "void_dropper_block_entity",
             () -> BlockEntityType.Builder.of(VoidDropperEntity::new, ModBlocks.VOID_DROPPER.get()).build(null)
     );
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<VoidPowerConnectorEntity>> VOID_POWER_CONNECTOR_ENTITY = REGISTRY.register(
+            "void_power_connector_entity",
+            () -> BlockEntityType.Builder.of(VoidPowerConnectorEntity::new, ModBlocks.VOID_POWER_CONNECTOR.get()).build(null)
+    );
 }
