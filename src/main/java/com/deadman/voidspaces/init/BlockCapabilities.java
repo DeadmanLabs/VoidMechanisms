@@ -13,6 +13,8 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.bus.api.SubscribeEvent;
 
 import com.deadman.voidspaces.VoidSpaces;
+import com.deadman.voidspaces.block.entity.VoidInPortEntity;
+import com.deadman.voidspaces.block.entity.VoidOutPortEntity;
 
 import java.util.function.Supplier;
 
@@ -27,6 +29,16 @@ public class BlockCapabilities {
             Capabilities.EnergyStorage.BLOCK,
             BlockEntities.VOID_POWER_CONNECTOR_ENTITY.get(),
             (be, side) -> be.getEnergyStorage()
+        );
+        event.registerBlockEntity(
+            Capabilities.ItemHandler.BLOCK,
+            BlockEntities.VOID_IN_PORT_ENTITY.get(),
+            (be, side) -> be.getItemHandler(side)
+        );
+        event.registerBlockEntity(
+            Capabilities.ItemHandler.BLOCK,
+            BlockEntities.VOID_OUT_PORT_ENTITY.get(),
+            (be, side) -> be.getItemHandler(side)
         );
     }
 }

@@ -61,6 +61,15 @@ public class ItemFluidList extends AbstractWidget {
         fluidEntries.entrySet().removeIf(entry -> entry.getValue().count <= 0);
     }
 
+    public void clearItems() {
+        itemEntries.clear();
+    }
+
+    public void clearAll() {
+        itemEntries.clear();
+        fluidEntries.clear();
+    }
+
     @Override
     public void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float delta) {
         int currentY = getY();

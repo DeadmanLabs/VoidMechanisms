@@ -116,11 +116,10 @@ public class VoidEngine extends Block implements EntityBlock {
                 }
                 blockEntity.setOwner(player.getUUID());
             } else {
-                LOGGER.info("placer is not a server player!");
+                LOGGER.debug("placer is not a server player");
             }
-        } else {
-            LOGGER.info("block entity at placed location is not engine entity!");
         }
+        // Client-side setPlacedBy fires too — block entity not yet a ServerLevel, nothing to do
     }
 
     @Override
@@ -132,9 +131,7 @@ public class VoidEngine extends Block implements EntityBlock {
     public InteractionResult useWithoutItem(BlockState state, Level world, BlockPos pos, Player player, BlockHitResult hit) {
         if (!world.isClientSide && player instanceof ServerPlayer serverPlayer) {
             if (world.getBlockEntity(pos) instanceof EngineEntity engineEntity) {
-                if (engineEntity.getDimension() != null) {
-                    engineEntity.teleportIn(serverPlayer);
-                }
+                engineEntity.openEngineMenu(serverPlayer);
             }
         }
         return InteractionResult.sidedSuccess(world.isClientSide);

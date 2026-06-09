@@ -9,6 +9,8 @@ import net.neoforged.neoforge.registries.DeferredHolder;
 
 import com.deadman.voidspaces.block.entity.*;
 import com.deadman.voidspaces.VoidSpaces;
+import com.deadman.voidspaces.block.entity.VoidInPortEntity;
+import com.deadman.voidspaces.block.entity.VoidOutPortEntity;
 
 public class BlockEntities {
     public static final DeferredRegister<BlockEntityType<?>> REGISTRY = DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, VoidSpaces.MODID);
@@ -43,5 +45,13 @@ public class BlockEntities {
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<VoidPowerConnectorEntity>> VOID_POWER_CONNECTOR_ENTITY = REGISTRY.register(
             "void_power_connector_entity",
             () -> BlockEntityType.Builder.of(VoidPowerConnectorEntity::new, ModBlocks.VOID_POWER_CONNECTOR.get()).build(null)
+    );
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<VoidInPortEntity>> VOID_IN_PORT_ENTITY = REGISTRY.register(
+            "void_in_port_entity",
+            () -> BlockEntityType.Builder.of(VoidInPortEntity::new, ModBlocks.VOID_IN_PORT.get()).build(null)
+    );
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<VoidOutPortEntity>> VOID_OUT_PORT_ENTITY = REGISTRY.register(
+            "void_out_port_entity",
+            () -> BlockEntityType.Builder.of(VoidOutPortEntity::new, ModBlocks.VOID_OUT_PORT.get()).build(null)
     );
 }

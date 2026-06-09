@@ -37,6 +37,9 @@ public class Tabs {
                 output.accept(ModItems.VOID_CARD.get());
                 output.accept(ModItems.VOID_CORE.get());
                 output.accept(ModItems.VOID_FRAME.get());
+                output.accept(new ItemStack(ModBlocks.VOID_IN_PORT.get().asItem(), 1));
+                output.accept(new ItemStack(ModBlocks.VOID_OUT_PORT.get().asItem(), 1));
+                output.accept(ModItems.TICK_WAND.get());
             })
             .withSearchBar()
             .build()

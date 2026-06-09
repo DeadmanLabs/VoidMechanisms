@@ -5,14 +5,18 @@ import java.util.stream.IntStream;
 
 import javax.annotation.Nullable;
 
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.ContainerData;
+import net.minecraft.world.inventory.SimpleContainerData;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ChunkPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import io.netty.buffer.Unpooled;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -21,268 +25,329 @@ import net.minecraft.core.NonNullList;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.IntTag;
 import net.minecraft.network.Connection;
-import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.ContainerHelper;
 import net.minecraft.world.WorldlyContainer;
-import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.RandomizableContainerBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.energy.EnergyStorage;
-import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.items.wrapper.SidedInvWrapper;
 
+import com.deadman.voidspaces.block.VoidHopper;
+import com.deadman.voidspaces.block.VoidDropper;
+import com.deadman.voidspaces.block.VoidInPort;
+import com.deadman.voidspaces.block.VoidOutPort;
 import com.deadman.voidspaces.init.BlockEntities;
+import com.deadman.voidspaces.init.MaterialAnalysisResultPacket;
 import com.deadman.voidspaces.helpers.Dimensional;
+import com.deadman.voidspaces.world.inventory.VoidEngineMenu;
+import net.neoforged.neoforge.network.PacketDistributor;
 
 public class EngineEntity extends RandomizableContainerBlockEntity implements WorldlyContainer {
     private static final Logger LOGGER = LoggerFactory.getLogger(EngineEntity.class);
+
     private UUID owner;
     private Dimensional dimension;
-    private String savedDimensionId; // Temporary storage for dimension ID during load
-    private CompoundTag savedReturnData; // Temporary storage for return data during load
-    //dimension
+    private String savedDimensionId;
+    private CompoundTag savedReturnData;
+    private int chunkSize = 1; // 1-4 (1x1 to 4x4 chunks), locked once dimension is created
+
     public static final int TANK_CAPACITY = 20000;
-    //private FluidStack fluidStorage = new FluidStack(20000);
     public BlockPos location;
 
-    // 9 input slots + 9 output slots = 18 total slots
-    private NonNullList<ItemStack> stacks = NonNullList.<ItemStack>withSize(18, ItemStack.EMPTY);
-    public static final int INPUT_SLOT_START = 0;
-    public static final int INPUT_SLOT_COUNT = 9;
-    public static final int OUTPUT_SLOT_START = 9;
-    public static final int OUTPUT_SLOT_COUNT = 9;
+    private static final int INPUT_SLOT_START = 0;
+    private static final int INPUT_SLOT_COUNT = 9;
+    private static final int OUTPUT_SLOT_START = 9;
+    private static final int OUTPUT_SLOT_COUNT = 9;
+    private NonNullList<ItemStack> stacks = NonNullList.withSize(18, ItemStack.EMPTY);
     private final SidedInvWrapper handler = new SidedInvWrapper(this, null);
+
+    // Hopper/dropper cache to avoid O(16*height*16) scan every tick
+    private List<VoidHopperEntity> cachedHoppers = null;
+    private List<VoidDropperEntity> cachedDroppers = null;
+    private static final int CACHE_REFRESH_INTERVAL = 20;
+    private int cacheTimer = 0;
+
+    // ContainerData indices: 0=chunkSize, 1=dimensionStatus, 2=simulationSpeed, 3=randomTickSpeed
+    private final SimpleContainerData engineData = new SimpleContainerData(4);
 
     public EngineEntity(BlockPos pos, BlockState state) {
         super(BlockEntities.ENGINE_BLOCK_ENTITY.get(), pos, state);
         this.location = pos;
     }
 
-    public void setOwner(UUID uuid) {
-        this.owner = uuid;
-        LOGGER.info("Owner set to: {}", uuid);
-        if (this.level.getServer() != null) {
-            this.dimension = new Dimensional(this.level.getServer(), uuid);
-            LOGGER.info("Wrote new dimension: {}", this.dimension.dimension.toString());
-            this.dimension.teleportIn(this.level.getServer().getPlayerList().getPlayer(this.owner));
-        } else {
-            LOGGER.info("Level is not serverside!");
+    // -------------------------------------------------------------------------
+    // Tick
+    // -------------------------------------------------------------------------
+
+    public static void tick(Level level, BlockPos pos, BlockState state, EngineEntity entity) {
+        if (level.isClientSide || entity.dimension == null) return;
+
+        // Refresh hopper/dropper cache periodically instead of scanning every tick
+        if (--entity.cacheTimer <= 0) {
+            entity.cachedHoppers = null;
+            entity.cachedDroppers = null;
+            entity.cacheTimer = CACHE_REFRESH_INTERVAL;
+        }
+
+        entity.transferItemsToVoidHoppers();
+        entity.transferItemsFromVoidDroppers();
+
+        // Keep ContainerData in sync
+        entity.syncEngineData();
+    }
+
+    private void syncEngineData() {
+        engineData.set(0, chunkSize);
+        int status = 0;
+        if (dimension != null) {
+            status = dimension.isSimulating() ? 2 : 1;
+        }
+        engineData.set(1, status);
+        engineData.set(2, dimension != null ? dimension.getSimulationSpeed() : 1);
+        engineData.set(3, dimension != null ? dimension.getRandomTickSpeed() : 3);
+    }
+
+    // -------------------------------------------------------------------------
+    // Item routing (VoidHopper/VoidDropper)
+    // -------------------------------------------------------------------------
+
+    private void transferItemsToVoidHoppers() {
+        ServerLevel dimensionLevel = level.getServer().getLevel(dimension.dimension);
+        if (dimensionLevel == null) return;
+        for (int i = INPUT_SLOT_START; i < INPUT_SLOT_START + INPUT_SLOT_COUNT; i++) {
+            ItemStack inputStack = stacks.get(i);
+            if (inputStack.isEmpty()) continue;
+            for (VoidHopperEntity hopper : getVoidHoppers(dimensionLevel)) {
+                if (hopper.acceptsItem(inputStack) && addItemToVoidHopper(hopper, inputStack)) {
+                    stacks.set(i, ItemStack.EMPTY);
+                    setChanged();
+                    break;
+                }
+            }
         }
     }
 
-    public static void tick(Level level, BlockPos pos, BlockState state, EngineEntity blockEntity) {
-        if (!level.isClientSide && blockEntity.dimension != null) {
-            // Transfer items from input slots to VoidHoppers in the dimension
-            blockEntity.transferItemsToVoidHoppers();
-            
-            // Transfer items from VoidDroppers to output slots
-            blockEntity.transferItemsFromVoidDroppers();
-        }
-    }
-    
-    private void transferItemsToVoidHoppers() {
-        ServerLevel dimensionLevel = this.level.getServer().getLevel(this.dimension.dimension);
-        if (dimensionLevel == null) return;
-        
-        // Check input slots for items to transfer
-        for (int i = INPUT_SLOT_START; i < INPUT_SLOT_START + INPUT_SLOT_COUNT; i++) {
-            ItemStack inputStack = this.stacks.get(i);
-            if (!inputStack.isEmpty()) {
-                // Find a VoidHopper in the dimension that wants this item
-                List<VoidHopperEntity> voidHoppers = findVoidHoppersInDimension(dimensionLevel);
-                for (VoidHopperEntity hopper : voidHoppers) {
-                    if (hopper.acceptsItem(inputStack)) {
-                        // Transfer the item to the hopper's visual inventory
-                        if (addItemToVoidHopper(hopper, inputStack)) {
-                            this.stacks.set(i, ItemStack.EMPTY);
-                            this.setChanged();
-                            LOGGER.info("Transferred {} to VoidHopper at {}", inputStack.getDisplayName().getString(), hopper.getBlockPos());
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
     private void transferItemsFromVoidDroppers() {
-        ServerLevel dimensionLevel = this.level.getServer().getLevel(this.dimension.dimension);
+        ServerLevel dimensionLevel = level.getServer().getLevel(dimension.dimension);
         if (dimensionLevel == null) return;
-        
-        List<VoidDropperEntity> voidDroppers = findVoidDroppersInDimension(dimensionLevel);
-        for (VoidDropperEntity dropper : voidDroppers) {
-            // Try to extract items from dropper to output slots
-            List<ItemStack> availableTypes = dropper.getStoredItemTypes();
-            for (ItemStack type : availableTypes) {
-                // Find an empty output slot
+        for (VoidDropperEntity dropper : getVoidDroppers(dimensionLevel)) {
+            for (ItemStack type : dropper.getStoredItemTypes()) {
                 for (int i = OUTPUT_SLOT_START; i < OUTPUT_SLOT_START + OUTPUT_SLOT_COUNT; i++) {
-                    ItemStack outputStack = this.stacks.get(i);
-                    if (outputStack.isEmpty()) {
-                        // Extract up to a full stack
+                    ItemStack out = stacks.get(i);
+                    if (out.isEmpty()) {
                         ItemStack extracted = dropper.extractFromInfiniteStorage(type, type.getMaxStackSize());
-                        if (!extracted.isEmpty()) {
-                            this.stacks.set(i, extracted);
-                            this.setChanged();
-                            LOGGER.info("Extracted {} from VoidDropper at {}", extracted.getDisplayName().getString(), dropper.getBlockPos());
-                            break;
-                        }
-                    } else if (ItemStack.isSameItemSameComponents(outputStack, type) && outputStack.getCount() < outputStack.getMaxStackSize()) {
-                        // Add to existing stack
-                        int spaceLeft = outputStack.getMaxStackSize() - outputStack.getCount();
-                        ItemStack extracted = dropper.extractFromInfiniteStorage(type, spaceLeft);
-                        if (!extracted.isEmpty()) {
-                            outputStack.grow(extracted.getCount());
-                            this.setChanged();
-                            LOGGER.info("Added {} to existing stack in output slot", extracted.getDisplayName().getString());
-                            break;
-                        }
+                        if (!extracted.isEmpty()) { stacks.set(i, extracted); setChanged(); break; }
+                    } else if (ItemStack.isSameItemSameComponents(out, type) && out.getCount() < out.getMaxStackSize()) {
+                        int space = out.getMaxStackSize() - out.getCount();
+                        ItemStack extracted = dropper.extractFromInfiniteStorage(type, space);
+                        if (!extracted.isEmpty()) { out.grow(extracted.getCount()); setChanged(); break; }
                     }
                 }
             }
         }
     }
-    
-    private List<VoidHopperEntity> findVoidHoppersInDimension(ServerLevel dimensionLevel) {
-        List<VoidHopperEntity> hoppers = new ArrayList<>();
-        ChunkPos chunkPos = new ChunkPos(0, 0);
-        
-        for (int x = chunkPos.x * 16; x <= chunkPos.x * 16 + 15; x++) {
-            for (int y = dimensionLevel.getMinBuildHeight(); y < dimensionLevel.getMaxBuildHeight(); y++) {
-                for (int z = chunkPos.z * 16; z <= chunkPos.z * 16 + 15; z++) {
-                    BlockPos pos = new BlockPos(x, y, z);
-                    if (dimensionLevel.getBlockEntity(pos) instanceof VoidHopperEntity hopper) {
-                        hoppers.add(hopper);
-                    }
-                }
+
+    private List<VoidHopperEntity> getVoidHoppers(ServerLevel dimensionLevel) {
+        if (cachedHoppers != null) return cachedHoppers;
+        cachedHoppers = scanChunksForEntity(dimensionLevel, VoidHopperEntity.class);
+        return cachedHoppers;
+    }
+
+    private List<VoidDropperEntity> getVoidDroppers(ServerLevel dimensionLevel) {
+        if (cachedDroppers != null) return cachedDroppers;
+        cachedDroppers = scanChunksForEntity(dimensionLevel, VoidDropperEntity.class);
+        return cachedDroppers;
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> List<T> scanChunksForEntity(ServerLevel dimensionLevel, Class<T> entityClass) {
+        List<T> result = new ArrayList<>();
+        for (int cx = 0; cx < chunkSize; cx++) {
+            for (int cz = 0; cz < chunkSize; cz++) {
+                net.minecraft.world.level.chunk.LevelChunk chunk = dimensionLevel.getChunk(cx, cz);
+                chunk.getBlockEntities().values().forEach(be -> {
+                    if (entityClass.isInstance(be)) result.add(entityClass.cast(be));
+                });
             }
         }
-        return hoppers;
+        return result;
     }
-    
-    private List<VoidDropperEntity> findVoidDroppersInDimension(ServerLevel dimensionLevel) {
-        List<VoidDropperEntity> droppers = new ArrayList<>();
-        ChunkPos chunkPos = new ChunkPos(0, 0);
-        
-        for (int x = chunkPos.x * 16; x <= chunkPos.x * 16 + 15; x++) {
-            for (int y = dimensionLevel.getMinBuildHeight(); y < dimensionLevel.getMaxBuildHeight(); y++) {
-                for (int z = chunkPos.z * 16; z <= chunkPos.z * 16 + 15; z++) {
-                    BlockPos pos = new BlockPos(x, y, z);
-                    if (dimensionLevel.getBlockEntity(pos) instanceof VoidDropperEntity dropper) {
-                        droppers.add(dropper);
-                    }
-                }
-            }
-        }
-        return droppers;
-    }
-    
+
     private boolean addItemToVoidHopper(VoidHopperEntity hopper, ItemStack stack) {
-        // Try to add to the hopper's visual inventory
         for (int i = 0; i < hopper.getContainerSize(); i++) {
-            ItemStack slotStack = hopper.getItem(i);
-            if (slotStack.isEmpty()) {
-                hopper.setItem(i, stack.copy());
-                return true;
-            } else if (ItemStack.isSameItemSameComponents(slotStack, stack) && slotStack.getCount() < slotStack.getMaxStackSize()) {
-                int spaceLeft = slotStack.getMaxStackSize() - slotStack.getCount();
-                int toAdd = Math.min(spaceLeft, stack.getCount());
-                slotStack.grow(toAdd);
+            ItemStack slot = hopper.getItem(i);
+            if (slot.isEmpty()) { hopper.setItem(i, stack.copy()); return true; }
+            if (ItemStack.isSameItemSameComponents(slot, stack) && slot.getCount() < slot.getMaxStackSize()) {
+                slot.grow(Math.min(stack.getCount(), slot.getMaxStackSize() - slot.getCount()));
                 return true;
             }
         }
         return false;
     }
 
-    //private int getTotalFluidVolume()
+    // -------------------------------------------------------------------------
+    // GUI opening
+    // -------------------------------------------------------------------------
+
+    public void openEngineMenu(ServerPlayer player) {
+        player.openMenu(this, buf -> buf.writeBlockPos(worldPosition));
+    }
 
     @Override
-    public void onLoad() {
-        super.onLoad();
-        if (!this.level.isClientSide) {
-            this.setChanged();
-            // Initialize dimension if we have owner but no dimension (restored from NBT)
-            if (this.owner != null && this.dimension == null && this.level.getServer() != null) {
-                if (this.savedDimensionId != null) {
-                    // Restore existing dimension from saved ID
-                    LOGGER.info("Restoring existing dimension on load: {}", this.savedDimensionId);
-                    try {
-                        ResourceLocation dimensionLocation = ResourceLocation.parse(this.savedDimensionId);
-                        ResourceKey<Level> dimensionKey = ResourceKey.create(Registries.DIMENSION, dimensionLocation);
-                        this.dimension = new Dimensional(this.level.getServer(), this.owner, dimensionKey);
-                        
-                        // Load return data if we saved it
-                        if (this.savedReturnData != null) {
-                            this.dimension.loadReturnData(this.savedReturnData);
-                            this.savedReturnData = null;
-                        }
-                        
-                        this.savedDimensionId = null; // Clear the temporary storage
-                        LOGGER.info("Successfully restored dimension from saved ID: {}", dimensionKey);
-                        
-                        // Check if the owner is already in this dimension and restore their return position
-                        ServerPlayer ownerPlayer = this.level.getServer().getPlayerList().getPlayer(this.owner);
-                        if (ownerPlayer != null && ownerPlayer.level().dimension().location().toString().equals(dimensionKey.location().toString())) {
-                            this.dimension.restoreOwnerReturnPosition(ownerPlayer);
-                            LOGGER.info("Player {} was already in dimension on restore, restored return position", ownerPlayer.getName().getString());
-                        }
-                        
-                        // Also check for any other players who might be in this dimension
-                        for (ServerPlayer player : this.level.getServer().getPlayerList().getPlayers()) {
-                            if (player.level().dimension().location().toString().equals(dimensionKey.location().toString())) {
-                                this.dimension.restoreOwnerReturnPosition(player);
-                                LOGGER.info("Restored return position for player {} found in dimension on reload", player.getName().getString());
-                                
-                                // Also ensure world border is set up for this player
-                                this.level.getServer().execute(() -> {
-                                    this.dimension.ensureWorldBorderForPlayer(player);
-                                    LOGGER.info("Ensured world border for player {} during dimension restoration", player.getName().getString());
-                                });
-                            }
-                        }
-                    } catch (IllegalArgumentException e) {
-                        LOGGER.warn("Failed to restore dimension from saved ID: {}", this.savedDimensionId, e);
-                        this.savedDimensionId = null;
-                        this.savedReturnData = null;
-                    }
-                } else {
-                    // Create new dimension (fresh engine placement)
-                    LOGGER.info("Creating new dimension on load for owner: {}", this.owner);
-                    this.dimension = new Dimensional(this.level.getServer(), this.owner);
-                }
-            }
+    public AbstractContainerMenu createMenu(int containerId, Inventory playerInventory) {
+        return new VoidEngineMenu(containerId, playerInventory, this, engineData);
+    }
+
+    // -------------------------------------------------------------------------
+    // Action handlers (called from EngineActionPacket)
+    // -------------------------------------------------------------------------
+
+    public void teleportIn(ServerPlayer player) {
+        if (dimension == null && owner != null && level != null && level.getServer() != null) {
+            LOGGER.info("Creating dimension on first entry for owner={} chunkSize={}", owner, chunkSize);
+            dimension = new Dimensional(level.getServer(), owner, chunkSize);
+        }
+        if (dimension != null) {
+            // Persist engine location so the wrapper can be restored after re-login inside the dimension
+            player.getPersistentData().putLong("VoidSpaces_EnginePos", worldPosition.asLong());
+            dimension.restoreOwnerReturnPosition(player);
+            dimension.teleportIn(player);
+        } else {
+            LOGGER.warn("Cannot teleport player — dimension not available");
         }
     }
 
-    public Dimensional getDimension() {
-        return this.dimension;
+    public void analyzeContents(ServerPlayer requestingPlayer) {
+        if (dimension == null) {
+            requestingPlayer.sendSystemMessage(Component.literal("Dimension not yet created — enter it first."));
+            return;
+        }
+        ServerLevel dimensionLevel = level.getServer().getLevel(dimension.dimension);
+        if (dimensionLevel == null) {
+            requestingPlayer.sendSystemMessage(Component.literal("Dimension not loaded. Enter it to load it."));
+            return;
+        }
+
+        Map<Item, Long> blockCounts = new LinkedHashMap<>();
+        Map<String, Integer> entityCounts = new LinkedHashMap<>();
+
+        for (int cx = 0; cx < chunkSize; cx++) {
+            for (int cz = 0; cz < chunkSize; cz++) {
+                net.minecraft.world.level.chunk.LevelChunk chunk = dimensionLevel.getChunk(cx, cz);
+
+                // Count blocks
+                BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+                for (int x = cx * 16; x <= cx * 16 + 15; x++) {
+                    for (int z = cz * 16; z <= cz * 16 + 15; z++) {
+                        for (int y = dimensionLevel.getMinBuildHeight(); y < dimensionLevel.getMaxBuildHeight(); y++) {
+                            mutable.set(x, y, z);
+                            BlockState bs = chunk.getBlockState(mutable);
+                            if (bs.isAir()) continue;
+                            if (y == dimensionLevel.getMinBuildHeight()) continue; // skip bedrock floor
+                            // Fluid source blocks — express as their bucket item
+                            var fluidState = bs.getFluidState();
+                            if (!fluidState.isEmpty() && fluidState.isSource()) {
+                                Item bucketItem = fluidState.getType().getBucket();
+                                if (bucketItem != Items.AIR) {
+                                    blockCounts.merge(bucketItem, 1L, Long::sum);
+                                }
+                                continue;
+                            }
+                            Block block = bs.getBlock();
+                            if (block instanceof VoidHopper || block instanceof VoidDropper
+                                    || block instanceof VoidInPort || block instanceof VoidOutPort) continue;
+                            Item item = block.asItem();
+                            if (item == Items.AIR) continue;
+                            blockCounts.merge(item, 1L, Long::sum);
+                        }
+                    }
+                }
+
+                // Count entities in this chunk
+                AABB chunkBounds = new AABB(cx * 16, dimensionLevel.getMinBuildHeight(), cz * 16,
+                                           cx * 16 + 16, dimensionLevel.getMaxBuildHeight(), cz * 16 + 16);
+                dimensionLevel.getEntities().get(chunkBounds, entity -> {
+                    if (entity instanceof ServerPlayer) return;
+                    String typeName = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString();
+                    entityCounts.merge(typeName, 1, Integer::sum);
+                });
+            }
+        }
+
+        // Build packet
+        List<MaterialAnalysisResultPacket.BlockCount> blockList = new ArrayList<>();
+        blockCounts.forEach((item, count) -> blockList.add(
+                new MaterialAnalysisResultPacket.BlockCount(new ItemStack(item), count)));
+
+        List<MaterialAnalysisResultPacket.EntityCount> entityList = new ArrayList<>();
+        entityCounts.forEach((type, count) -> entityList.add(
+                new MaterialAnalysisResultPacket.EntityCount(type, count)));
+
+        PacketDistributor.sendToPlayer(requestingPlayer,
+                new MaterialAnalysisResultPacket(blockList, entityList));
+        LOGGER.info("Sent analysis to {} ({} block types, {} entity types)",
+                    requestingPlayer.getName().getString(), blockList.size(), entityList.size());
     }
+
+    public void startSimulation(int speed) {
+        if (dimension == null) return;
+        dimension.startSimulation(speed);
+        setChanged();
+    }
+
+    public void stopSimulation() {
+        if (dimension == null) return;
+        dimension.stopSimulation();
+        setChanged();
+    }
+
+    public void setSimulationSpeed(int speed) {
+        if (dimension == null) return;
+        dimension.setTickRate(speed); // change tick multiplier without restarting tracking
+        setChanged();
+    }
+
+    public void setChunkSize(int size) {
+        if (dimension != null) {
+            LOGGER.warn("Cannot change chunk size once dimension is created");
+            return;
+        }
+        chunkSize = Math.max(1, Math.min(4, size));
+        setChanged();
+    }
+
+    public void setRandomTickSpeed(int speed) {
+        if (dimension == null) return;
+        dimension.setRandomTickSpeed(speed);
+        setChanged();
+    }
+
+    // -------------------------------------------------------------------------
+    // NBT
+    // -------------------------------------------------------------------------
 
     @Override
     protected void saveAdditional(CompoundTag tag, Provider provider) {
         super.saveAdditional(tag, provider);
         tag.put("energyStorage", energyStorage.serializeNBT(provider));
-        if (this.dimension != null) {
-            tag.putString("dimensionId", this.dimension.dimension.location().toString());
+        tag.putInt("chunkSize", chunkSize);
+        if (owner != null) tag.putUUID("owner", owner);
+        if (dimension != null) {
+            tag.putString("dimensionId", dimension.dimension.location().toString());
+            CompoundTag returnData = dimension.saveReturnData();
+            if (!returnData.isEmpty()) tag.put("returnData", returnData);
         }
-        if (this.owner != null) {
-            tag.putUUID("owner", this.owner);
-        }
-        if (this.dimension != null) {
-            CompoundTag returnData = this.dimension.saveReturnData();
-            if (!returnData.isEmpty()) {
-                tag.put("returnData", returnData);
-            }
-        }
-        LOGGER.info("Saved EngineEntity NBT - Owner: {}, DimensionId: {}", this.owner, this.dimension != null ? this.dimension.dimension.location().toString() : "null");
     }
 
     @Override
@@ -291,67 +356,64 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
         if (tag.get("energyStorage") instanceof IntTag intTag) {
             energyStorage.deserializeNBT(provider, intTag);
         }
-        if (tag.hasUUID("owner")) {
-            this.owner = tag.getUUID("owner");
-            LOGGER.info("Loaded owner from NBT: {}", this.owner);
-        }
-        if (tag.contains("dimensionId") && this.owner != null) {
-            String dimensionIdString = tag.getString("dimensionId");
-            this.savedDimensionId = dimensionIdString; // Save for onLoad()
-            LOGGER.info("Loading existing dimension from NBT: {}", dimensionIdString);
-            try {
-                ResourceLocation dimensionLocation = ResourceLocation.parse(dimensionIdString);
-                ResourceKey<Level> dimensionKey = ResourceKey.create(Registries.DIMENSION, dimensionLocation);
-                if (this.level != null && this.level.getServer() != null) {
-                    this.dimension = new Dimensional(this.level.getServer(), this.owner, dimensionKey);
-                    // Load return data if available
-                    if (tag.contains("returnData")) {
-                        this.dimension.loadReturnData(tag.getCompound("returnData"));
-                    }
-                    this.savedDimensionId = null; // Clear since we successfully created the dimension
-                    this.savedReturnData = null;
-                    LOGGER.info("Successfully restored dimension: {}", dimensionKey);
-                } else {
-                    // Save return data for later
-                    if (tag.contains("returnData")) {
-                        this.savedReturnData = tag.getCompound("returnData");
-                    }
-                    LOGGER.warn("Server in load is null, will restore in onLoad()");
+        if (tag.contains("chunkSize")) chunkSize = Math.max(1, Math.min(4, tag.getInt("chunkSize")));
+        if (tag.hasUUID("owner")) owner = tag.getUUID("owner");
+        if (tag.contains("dimensionId") && owner != null) {
+            String dimId = tag.getString("dimensionId");
+            savedDimensionId = dimId;
+            if (tag.contains("returnData")) savedReturnData = tag.getCompound("returnData");
+            if (level != null && level.getServer() != null) {
+                try {
+                    ResourceLocation loc = ResourceLocation.parse(dimId);
+                    ResourceKey<Level> key = ResourceKey.create(Registries.DIMENSION, loc);
+                    dimension = new Dimensional(level.getServer(), owner, key, chunkSize);
+                    if (savedReturnData != null) { dimension.loadReturnData(savedReturnData); savedReturnData = null; }
+                    savedDimensionId = null;
+                    LOGGER.info("Restored dimension {} chunkSize={}", key, chunkSize);
+                } catch (IllegalArgumentException e) {
+                    LOGGER.warn("Invalid dimensionId: {}", dimId, e);
+                    savedDimensionId = null;
                 }
-            } catch (IllegalArgumentException e) {
-                LOGGER.warn("Invalid dimensionId: {}", dimensionIdString, e);
-                this.savedDimensionId = null;
             }
         }
-        // Don't create a new dimension here if we don't have an existing one
-        // That should only happen when a player places the block
+    }
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        if (!level.isClientSide && owner != null && dimension == null && level.getServer() != null) {
+            if (savedDimensionId != null) {
+                try {
+                    ResourceLocation loc = ResourceLocation.parse(savedDimensionId);
+                    ResourceKey<Level> key = ResourceKey.create(Registries.DIMENSION, loc);
+                    dimension = new Dimensional(level.getServer(), owner, key, chunkSize);
+                    if (savedReturnData != null) { dimension.loadReturnData(savedReturnData); savedReturnData = null; }
+                    savedDimensionId = null;
+
+                    // Restore return position for any players already in the dimension
+                    for (ServerPlayer p : level.getServer().getPlayerList().getPlayers()) {
+                        if (p.level().dimension().location().toString().equals(key.location().toString())) {
+                            dimension.restoreOwnerReturnPosition(p);
+                            level.getServer().execute(() -> dimension.ensureWorldBorderForPlayer(p));
+                        }
+                    }
+                } catch (IllegalArgumentException e) {
+                    LOGGER.warn("Failed to restore dimension from savedDimensionId: {}", savedDimensionId, e);
+                    savedDimensionId = null;
+                    savedReturnData = null;
+                }
+            }
+            setChanged();
+        }
     }
 
     public void readAdditionalSaveData(CompoundTag tag, Provider provider) {
-        this.loadAdditional(tag, provider);
+        loadAdditional(tag, provider);
     }
 
-    public void teleportIn(ServerPlayer player) {
-        if (this.dimension != null) {
-            // Restore return position for owner if available
-            this.dimension.restoreOwnerReturnPosition(player);
-            this.dimension.teleportIn(player);
-        } else {
-            LOGGER.warn("Attempted to teleport player into null dimension!");
-        }
-    }
-
-    public UUID getOwner() {
-        return this.owner;
-    }
-
-    public ResourceKey<Level> getDimensionKey() {
-        return this.dimension != null ? this.dimension.dimension : null;
-    }
-
-    public String getDimensionName() {
-        return this.dimension != null ? this.dimension.dimension.location().toString() : "None";
-    }
+    // -------------------------------------------------------------------------
+    // Network sync
+    // -------------------------------------------------------------------------
 
     @Override
     public ClientboundBlockEntityDataPacket getUpdatePacket() {
@@ -361,147 +423,121 @@ public class EngineEntity extends RandomizableContainerBlockEntity implements Wo
     @Override
     public void onDataPacket(Connection net, ClientboundBlockEntityDataPacket pkt, Provider provider) {
         super.onDataPacket(net, pkt, provider);
-        this.loadAdditional(pkt.getTag(), provider);
+        loadAdditional(pkt.getTag(), provider);
     }
 
     @Override
     public CompoundTag getUpdateTag(Provider lookupProvider) {
         CompoundTag tag = super.getUpdateTag(lookupProvider);
-        this.saveAdditional(tag, lookupProvider);
+        saveAdditional(tag, lookupProvider);
         return tag;
     }
 
-    @Override
-    public int getContainerSize() {
-        return stacks.size();
+    // -------------------------------------------------------------------------
+    // Accessors
+    // -------------------------------------------------------------------------
+
+    public Dimensional getDimension() { return dimension; }
+    public UUID getOwner() { return owner; }
+    public int getChunkSize() { return chunkSize; }
+    public boolean hasDimension() { return dimension != null; }
+    public ContainerData getEngineData() { return engineData; }
+
+    public ResourceKey<Level> getDimensionKey() {
+        return dimension != null ? dimension.dimension : null;
     }
+
+    public String getDimensionName() {
+        return dimension != null ? dimension.dimension.location().toString() : "None";
+    }
+
+    public void setOwner(UUID uuid) {
+        owner = uuid;
+        LOGGER.info("VoidEngine owner set to: {}", uuid);
+        // Dimension is created lazily on first player entry via the GUI
+        setChanged();
+    }
+
+    // -------------------------------------------------------------------------
+    // Container (WorldlyContainer)
+    // -------------------------------------------------------------------------
+
+    @Override
+    public int getContainerSize() { return stacks.size(); }
 
     @Override
     public boolean isEmpty() {
-        for (ItemStack itemstack : this.stacks) {
-            if (!itemstack.isEmpty()) {
-                return false;
-            }
-        }
+        for (ItemStack s : stacks) if (!s.isEmpty()) return false;
         return true;
     }
 
     @Override
-    public Component getDefaultName() {
-        return Component.literal("void_engine");
-    }
+    public Component getDefaultName() { return Component.literal("void_engine"); }
 
     @Override
-    public AbstractContainerMenu createMenu(int id, Inventory inventory) {
-        //return new ScreenMenu(id, inventory, new FriendlyByteBuf(Unpooed.buffer()).writeBlockPos(this.worldPosition));
-        return null;
-    }
+    public Component getDisplayName() { return Component.literal("Void Engine"); }
 
     @Override
-    public Component getDisplayName() {
-        return Component.literal("Void Engine");
-    }
+    public NonNullList<ItemStack> getItems() { return stacks; }
 
     @Override
-    public NonNullList<ItemStack> getItems() {
-        return this.stacks;
-    }
-
-    @Override
-    protected void setItems(NonNullList<ItemStack> stacks) {
-        this.stacks = stacks;
-    }
+    protected void setItems(NonNullList<ItemStack> stacks) { this.stacks = stacks; }
 
     @Override
     public boolean canPlaceItem(int index, ItemStack stack) {
-        // Only allow items in input slots, and only if they match the void hopper filter
-        if (index >= INPUT_SLOT_START && index < INPUT_SLOT_START + INPUT_SLOT_COUNT) {
-            return isItemAcceptedByVoidHopper(stack);
-        }
-        return false; // Don't allow items in output slots
+        return index >= INPUT_SLOT_START && index < INPUT_SLOT_START + INPUT_SLOT_COUNT
+                && isItemAcceptedByVoidHopper(stack);
     }
-    
+
     public boolean isItemAcceptedByVoidHopper(ItemStack stack) {
-        if (this.dimension == null) return false;
-        
-        // Check all VoidHoppers in the dimension to see if any accept this item
-        ServerLevel dimensionLevel = this.level.getServer().getLevel(this.dimension.dimension);
-        if (dimensionLevel == null) return false;
-        
-        // Scan chunk 0 for VoidHoppers
-        ChunkPos chunkPos = new ChunkPos(0, 0);
-        for (int x = chunkPos.x * 16; x <= chunkPos.x * 16 + 15; x++) {
-            for (int y = dimensionLevel.getMinBuildHeight(); y < dimensionLevel.getMaxBuildHeight(); y++) {
-                for (int z = chunkPos.z * 16; z <= chunkPos.z * 16 + 15; z++) {
-                    BlockPos pos = new BlockPos(x, y, z);
-                    if (dimensionLevel.getBlockEntity(pos) instanceof VoidHopperEntity voidHopper) {
-                        if (voidHopper.acceptsItem(stack)) {
-                            return true;
-                        }
-                    }
-                }
-            }
+        if (dimension == null) return false;
+        ServerLevel dl = level.getServer().getLevel(dimension.dimension);
+        if (dl == null) return false;
+        for (VoidHopperEntity h : getVoidHoppers(dl)) {
+            if (h.acceptsItem(stack)) return true;
         }
-        
-        return false; // No VoidHopper accepts this item
+        return false;
     }
 
     @Override
     public int[] getSlotsForFace(Direction side) {
-        // Return input slots for insertion, output slots for extraction
-        if (side == Direction.UP || side == Direction.NORTH || side == Direction.SOUTH || side == Direction.EAST || side == Direction.WEST) {
-            // Input slots for insertion
-            return IntStream.range(INPUT_SLOT_START, INPUT_SLOT_START + INPUT_SLOT_COUNT).toArray();
-        } else if (side == Direction.DOWN) {
-            // Output slots for extraction
+        if (side == Direction.DOWN)
             return IntStream.range(OUTPUT_SLOT_START, OUTPUT_SLOT_START + OUTPUT_SLOT_COUNT).toArray();
-        }
-        return new int[0];
+        return IntStream.range(INPUT_SLOT_START, INPUT_SLOT_START + INPUT_SLOT_COUNT).toArray();
     }
 
     @Override
     public boolean canPlaceItemThroughFace(int index, ItemStack stack, @Nullable Direction direction) {
-        return this.canPlaceItem(index, stack);
+        return canPlaceItem(index, stack);
     }
 
     @Override
     public boolean canTakeItemThroughFace(int index, ItemStack stack, Direction direction) {
-        // Only allow extraction from output slots
         return index >= OUTPUT_SLOT_START && index < OUTPUT_SLOT_START + OUTPUT_SLOT_COUNT;
     }
 
-    public SidedInvWrapper getItemHandler() {
-        return handler;
-    }
+    public SidedInvWrapper getItemHandler() { return handler; }
+
+    // -------------------------------------------------------------------------
+    // Energy
+    // -------------------------------------------------------------------------
 
     private final EnergyStorage energyStorage = new EnergyStorage(200000, 200000, 200000, 0) {
         @Override
         public int receiveEnergy(int maxReceive, boolean simulate) {
-            int retval = super.receiveEnergy(maxReceive, simulate);
-            if (!simulate) {
-                setChanged();
-                level.sendBlockUpdated(worldPosition, level.getBlockState(worldPosition), level.getBlockState(worldPosition), 2);
-            }
-            return retval;
+            int r = super.receiveEnergy(maxReceive, simulate);
+            if (!simulate) { setChanged(); level.sendBlockUpdated(worldPosition, level.getBlockState(worldPosition), level.getBlockState(worldPosition), 2); }
+            return r;
         }
-
         @Override
         public int extractEnergy(int maxExtract, boolean simulate) {
-            int retval = super.extractEnergy(maxExtract, simulate);
-            if (!simulate) {
-                setChanged();
-                assert level != null;
-                level.sendBlockUpdated(worldPosition, level.getBlockState(worldPosition), level.getBlockState(worldPosition), 2);
-            }
-            return retval;
+            int r = super.extractEnergy(maxExtract, simulate);
+            if (!simulate) { setChanged(); assert level != null; level.sendBlockUpdated(worldPosition, level.getBlockState(worldPosition), level.getBlockState(worldPosition), 2); }
+            return r;
         }
     };
 
-    public EnergyStorage getEnergyStorage() {
-        return energyStorage;
-    }
+    public EnergyStorage getEnergyStorage() { return energyStorage; }
 
-    public void updateEngineState(BlockPos pos, boolean isPowered) {
-
-    }
+    public void updateEngineState(BlockPos pos, boolean isPowered) {}
 }

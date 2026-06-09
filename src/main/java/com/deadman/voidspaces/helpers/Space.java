@@ -162,6 +162,26 @@ public class Space {
         chunk.setUnsaved(true);
     }
 
+    /** Extracts contents from all player-accessible chunks in a chunkSize×chunkSize area. */
+    public static SpaceContents extractAllContents(ServerLevel level, int chunkSize) {
+        SpaceContents merged = new SpaceContents();
+        for (int cx = 0; cx < chunkSize; cx++) {
+            for (int cz = 0; cz < chunkSize; cz++) {
+                SpaceContents chunk = extractContents(level, new ChunkPos(cx, cz));
+                merged.blocks.putAll(chunk.blocks);
+                merged.blockEntities.putAll(chunk.blockEntities);
+                merged.entities.putAll(chunk.entities);
+            }
+        }
+        return merged;
+    }
+
+    /** Rebuilds contents across all accessible chunks. */
+    public static void rebuildAllContents(ServerLevel level, int chunkSize, SpaceContents contents) {
+        // rebuildContents works with absolute BlockPos keys, so a single call handles multi-chunk data
+        rebuildContents(level, new ChunkPos(0, 0), contents);
+    }
+
     public static void runSimulation(ServerLevel level, ChunkPos chunkPos, int tickCount) {
         ServerChunkCache chunkCache = level.getChunkSource();
         chunkCache.addRegionTicket(TicketType.UNKNOWN, chunkPos, 0, chunkPos);

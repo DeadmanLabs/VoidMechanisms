@@ -10,6 +10,7 @@ import net.neoforged.neoforge.common.extensions.IMenuTypeExtension;
 import com.deadman.voidspaces.VoidSpaces;
 import com.deadman.voidspaces.world.inventory.VoidHopperMenu;
 import com.deadman.voidspaces.world.inventory.VoidDropperMenu;
+import com.deadman.voidspaces.world.inventory.VoidEngineMenu;
 
 public class Menus {
     public static final DeferredRegister<MenuType<?>> REGISTRY = DeferredRegister.create(Registries.MENU, VoidSpaces.MODID);
@@ -22,9 +23,15 @@ public class Menus {
     );
     
     public static final DeferredHolder<MenuType<?>, MenuType<VoidDropperMenu>> VOID_DROPPER_MENU = REGISTRY.register(
-        "void_dropper", 
+        "void_dropper",
         () -> IMenuTypeExtension.create((containerId, inventory, buffer) -> {
             return new VoidDropperMenu(containerId, inventory, buffer);
         })
+    );
+
+    public static final DeferredHolder<MenuType<?>, MenuType<VoidEngineMenu>> VOID_ENGINE_MENU = REGISTRY.register(
+        "void_engine",
+        () -> IMenuTypeExtension.create((containerId, inventory, buffer) ->
+            new VoidEngineMenu(containerId, inventory, buffer))
     );
 }

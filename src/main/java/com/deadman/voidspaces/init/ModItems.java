@@ -64,4 +64,16 @@ public class ModItems {
             "void_power_connector",
             () -> new BlockItem(ModBlocks.VOID_POWER_CONNECTOR.get(), new Item.Properties())
     );
+    public static final DeferredItem<BlockItem> VOID_IN_PORT = REGISTRY.register(
+            "void_in_port",
+            () -> new BlockItem(ModBlocks.VOID_IN_PORT.get(), new Item.Properties())
+    );
+    public static final DeferredItem<BlockItem> VOID_OUT_PORT = REGISTRY.register(
+            "void_out_port",
+            () -> new BlockItem(ModBlocks.VOID_OUT_PORT.get(), new Item.Properties())
+    );
+    public static final DeferredItem<com.deadman.voidspaces.item.TickWand> TICK_WAND = REGISTRY.register(
+            "tick_wand",
+            com.deadman.voidspaces.item.TickWand::new
+    );
 }

@@ -18,6 +18,7 @@ import net.neoforged.neoforge.common.extensions.IMenuTypeExtension;
 import com.deadman.voidspaces.VoidSpaces;
 import com.deadman.voidspaces.client.gui.VoidHopperScreen;
 import com.deadman.voidspaces.client.gui.VoidDropperScreen;
+import com.deadman.voidspaces.client.gui.VoidEngineScreen;
 import com.deadman.voidspaces.client.VoidEngineRenderer;
 
 @EventBusSubscriber(modid = VoidSpaces.MODID, bus = EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
@@ -26,6 +27,7 @@ public class Screens {
     public static void onRegisterMenuScreens(RegisterMenuScreensEvent event) {
         event.register(Menus.VOID_HOPPER_MENU.get(), VoidHopperScreen::new);
         event.register(Menus.VOID_DROPPER_MENU.get(), VoidDropperScreen::new);
+        event.register(Menus.VOID_ENGINE_MENU.get(), VoidEngineScreen::new);
     }
 
     @SubscribeEvent

@@ -28,13 +28,14 @@ public record ExitDimensionPacket() implements CustomPacketPayload {
 
     public void handle(IPayloadContext context) {
         context.enqueueWork(() -> {
-            if (!(context.player() instanceof ServerPlayer player)) {
-                return;
-            }
+            if (!(context.player() instanceof ServerPlayer player)) return;
             ResourceKey<Level> key = player.level().dimension();
             Dimensional wrapper = Dimensional.getWrapper(key);
             if (wrapper != null) {
                 wrapper.teleportOut(player);
+            } else if (key.location().getNamespace().equals(VoidSpaces.MODID)) {
+                // Wrapper not yet loaded (engine chunk not loaded after re-login) — emergency exit
+                Dimensional.emergencyExit(player);
             }
         });
     }

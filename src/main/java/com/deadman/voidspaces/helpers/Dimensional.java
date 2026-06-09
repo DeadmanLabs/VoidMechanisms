@@ -1,26 +1,33 @@
 package com.deadman.voidspaces.helpers;
 
 import com.deadman.voidspaces.VoidSpaces;
+import com.deadman.voidspaces.block.entity.VoidInPortEntity;
+import com.deadman.voidspaces.block.entity.VoidOutPortEntity;
 import com.deadman.voidspaces.init.DataAttachments;
+import com.deadman.voidspaces.init.SimulationDataPacket;
 import com.mojang.serialization.DynamicOps;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.protocol.game.*;
 import net.minecraft.resources.RegistryOps;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerChunkCache;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.biome.*;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.border.BorderChangeListener;
@@ -28,676 +35,759 @@ import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.chunk.LevelChunk;
-import net.minecraft.core.BlockPos;
-import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.level.chunk.status.ChunkStatus;
-import net.minecraft.world.level.dimension.LevelStem;
-import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.BuiltinDimensionTypes;
-
-import java.util.*;
-
+import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.levelgen.FlatLevelSource;
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
-import net.minecraft.world.level.levelgen.Noises;
 import net.minecraft.world.level.levelgen.flat.FlatLayerInfo;
-import net.minecraft.world.level.levelgen.flat.FlatLevelGeneratorPresets;
 import net.minecraft.world.level.levelgen.flat.FlatLevelGeneratorSettings;
-import net.minecraft.world.level.levelgen.presets.WorldPresets;
-import net.minecraft.world.level.levelgen.structure.StructureSet;
 import net.minecraft.world.phys.AABB;
+import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.items.IItemHandler;
+import net.neoforged.neoforge.network.PacketDistributor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.deadman.voidspaces.infiniverse.api.*;
-import com.deadman.voidspaces.helpers.Space;
-import com.deadman.voidspaces.helpers.Space.SpaceContents;
 import java.lang.reflect.Field;
+import java.util.*;
+
+import com.deadman.voidspaces.infiniverse.api.*;
 
 public class Dimensional {
     private static final Logger LOGGER = LoggerFactory.getLogger(Dimensional.class);
     private static int dimensionCount = 0;
     private static final Map<ResourceKey<Level>, Dimensional> WRAPPERS = new HashMap<>();
+
     private final MinecraftServer server;
     public final ResourceKey<Level> dimension;
     private final ServerLevel dimensionLevel;
     private final UUID owner;
-    private Map<Player, BlockPos> returnPositions = new HashMap<>();
-    private Map<Player, ResourceKey<Level>> returnDimensions = new HashMap<>();
+    private final int chunkSize;
+
+    // Return position tracking
+    private final Map<Player, BlockPos> returnPositions = new HashMap<>();
+    private final Map<Player, ResourceKey<Level>> returnDimensions = new HashMap<>();
     private BlockPos ownerReturnPosition;
     private ResourceKey<Level> ownerReturnDimension;
-    private SpaceContents machine = new SpaceContents();
+    private Space.SpaceContents machine = new Space.SpaceContents();
     private final Map<ServerPlayer, BorderChangeListener> borderListeners = new HashMap<>();
 
-    public Dimensional(MinecraftServer server, UUID owner) {
+    // Auto-unload
+    private int emptyTicks = 0;
+    private static final int UNLOAD_GRACE_TICKS = 1200; // 60 seconds
+
+    // Simulation
+    private boolean simulating = false;
+    private int simulationSpeed = 1;
+    private long simStartRealTick = 0;
+    private long simTotalTicks = 0;
+    private long simRealTicks = 0;
+
+    // -------------------------------------------------------------------------
+    // Constructors
+    // -------------------------------------------------------------------------
+
+    public Dimensional(MinecraftServer server, UUID owner, int chunkSize) {
         if (server == null || owner == null) {
-            throw new IllegalArgumentException(String.format("Minecraft Server: {} || Owner: {} were null", server, owner));
+            throw new IllegalArgumentException("MinecraftServer and owner UUID must not be null");
         }
         this.server = server;
-        
-        // Find the next available dimension index by checking existing dimensions
-        int nextDimensionIndex = getNextAvailableDimensionIndex(server);
-        this.dimension = ResourceKey.create(Registries.DIMENSION, ResourceLocation.fromNamespaceAndPath(VoidSpaces.MODID, "voidspace_" + nextDimensionIndex));
-        
-        LOGGER.info("Creating new dimension with index {} (dimensionCount was {})", nextDimensionIndex, dimensionCount);
-        
-        ServerLevel infiniverseLevel = InfiniverseAPI.get().getOrCreateLevel(this.server, this.dimension, () -> createLevel(this.server, DimensionTypeOptions.FLAT));
-        this.dimensionLevel = infiniverseLevel;
-        LOGGER.info("New dimensional level type: {} for dimension: {}", infiniverseLevel.getClass().getSimpleName(), this.dimension.location());
-        
-        // If this is a regular ServerLevel instead of DimensionalLevel, apply workaround
-        if (!(infiniverseLevel instanceof DimensionalLevel)) {
-            LOGGER.warn("New dimension {} created as regular ServerLevel instead of DimensionalLevel - applying world border workaround", this.dimension.location());
-            this.applyWorldBorderWorkaround(infiniverseLevel);
-        }
-        
-        // Immediately test the world border
-        WorldBorder testBorder = infiniverseLevel.getWorldBorder();
-        LOGGER.info("World border after creation - Type: {}, Center: ({}, {}), Size: {}", 
-                   testBorder.getClass().getSimpleName(), 
-                   testBorder.getCenterX(), 
-                   testBorder.getCenterZ(), 
-                   testBorder.getSize());
+        this.chunkSize = Math.max(1, Math.min(4, chunkSize));
+
+        int nextIndex = getNextAvailableDimensionIndex(server);
+        this.dimension = ResourceKey.create(Registries.DIMENSION,
+                ResourceLocation.fromNamespaceAndPath(VoidSpaces.MODID, "voidspace_" + nextIndex));
+
+        LOGGER.info("Creating new dimension index={} chunkSize={}", nextIndex, this.chunkSize);
+
+        ServerLevel level = InfiniverseAPI.get().getOrCreateLevel(server, dimension,
+                () -> createLevel(server, DimensionTypeOptions.FLAT));
+        this.dimensionLevel = level;
+        applyChunkSize(level);
+
+        dimensionCount = Math.max(dimensionCount, nextIndex + 1);
         this.owner = owner;
-        
-        // Update dimensionCount to be at least the next index + 1
-        dimensionCount = Math.max(dimensionCount, nextDimensionIndex + 1);
-        WRAPPERS.put(this.dimension, this);
+        WRAPPERS.put(dimension, this);
+        forceLoadAccessibleChunks();
     }
 
-    public Dimensional(MinecraftServer server, UUID owner, ResourceKey<Level> existingDimension) {
+    /** Constructor for restoring a dimension that was saved to disk. */
+    public Dimensional(MinecraftServer server, UUID owner, ResourceKey<Level> existingDimension, int chunkSize) {
         this.server = server;
+        this.chunkSize = Math.max(1, Math.min(4, chunkSize));
         this.dimension = ResourceKey.create(Registries.DIMENSION, existingDimension.location());
-        ServerLevel infiniverseLevel = InfiniverseAPI.get().getOrCreateLevel(this.server, this.dimension, () -> createLevel(this.server, DimensionTypeOptions.FLAT));
-        this.dimensionLevel = infiniverseLevel;
-        LOGGER.info("Existing dimensional level type: {} for dimension: {}", infiniverseLevel.getClass().getSimpleName(), this.dimension.location());
-        
-        // If this is a regular ServerLevel from save loading, we need to work around it
-        if (!(infiniverseLevel instanceof DimensionalLevel)) {
-            LOGGER.warn("Dimension {} loaded as regular ServerLevel instead of DimensionalLevel - applying world border workaround", this.dimension.location());
-            // We can't replace the level, but we can override its world border behavior
-            this.applyWorldBorderWorkaround(infiniverseLevel);
-        }
-        
-        // Immediately test the world border
-        WorldBorder testBorder = infiniverseLevel.getWorldBorder();
-        LOGGER.info("World border after existing creation - Type: {}, Center: ({}, {}), Size: {}", 
-                   testBorder.getClass().getSimpleName(), 
-                   testBorder.getCenterX(), 
-                   testBorder.getCenterZ(), 
-                   testBorder.getSize());
         this.owner = owner;
-        WRAPPERS.put(this.dimension, this);
+
+        ServerLevel level = InfiniverseAPI.get().getOrCreateLevel(server, dimension,
+                () -> createLevel(server, DimensionTypeOptions.FLAT));
+        this.dimensionLevel = level;
+        applyChunkSize(level);
+
+        LOGGER.info("Restored dimension {} chunkSize={}", dimension.location(), this.chunkSize);
+        WRAPPERS.put(dimension, this);
+        forceLoadAccessibleChunks();
     }
+
+    /** Apply the correct chunk size to the level's world border. */
+    private void applyChunkSize(ServerLevel level) {
+        if (level instanceof DimensionalLevel dl) {
+            dl.setChunkSize(chunkSize);
+        } else {
+            LOGGER.warn("Dimension {} loaded as plain ServerLevel — applying reflection border workaround", dimension.location());
+            applyWorldBorderWorkaround(level);
+        }
+    }
+
+    /** Force-load only the accessible chunks so they stay ticked and saves stay scoped. */
+    private void forceLoadAccessibleChunks() {
+        ServerChunkCache chunkSource = dimensionLevel.getChunkSource();
+        for (int cx = 0; cx < chunkSize; cx++) {
+            for (int cz = 0; cz < chunkSize; cz++) {
+                ChunkPos cp = new ChunkPos(cx, cz);
+                chunkSource.addRegionTicket(TicketType.FORCED, cp, 3, cp);
+                LOGGER.debug("Force-loaded chunk ({},{}) in dimension {}", cx, cz, dimension.location());
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Static accessors
+    // -------------------------------------------------------------------------
 
     public static Dimensional getWrapper(ResourceKey<Level> key) {
         return WRAPPERS.get(key);
     }
-    
+
+    public static Collection<Dimensional> getAllWrappers() {
+        return Collections.unmodifiableCollection(WRAPPERS.values());
+    }
+
+    /**
+     * Fallback exit used when the Dimensional wrapper hasn't been created yet (e.g. engine
+     * chunk not loaded after re-login). Restores inventory and game mode from persistent data
+     * and teleports the player to their saved return position.
+     */
+    public static void emergencyExit(ServerPlayer player) {
+        double x = player.getX(), y = player.getY(), z = player.getZ();
+        float yRot = player.getYRot(), xRot = player.getXRot();
+        String originalGameMode = player.getPersistentData().getString("VoidSpaces_OriginalGameMode");
+
+        player.getInventory().clearContent();
+        if (player.getPersistentData().contains("VoidSpaces_SavedPlayerData")) {
+            player.load(player.getPersistentData().getCompound("VoidSpaces_SavedPlayerData"));
+            player.getPersistentData().remove("VoidSpaces_SavedPlayerData");
+        }
+        // Restore current position so changeDimension has a sane source position
+        player.setPos(x, y, z);
+        player.setYRot(yRot);
+        player.setXRot(xRot);
+
+        GameType gameType = originalGameMode.isEmpty()
+                ? GameType.SURVIVAL
+                : GameType.byName(originalGameMode, GameType.SURVIVAL);
+        player.setGameMode(gameType);
+        player.getAbilities().instabuild = false;
+        player.getAbilities().flying = false;
+        player.getAbilities().invulnerable = false;
+        player.onUpdateAbilities();
+        player.getPersistentData().remove("VoidSpaces_InDimension");
+        player.getPersistentData().remove("VoidSpaces_OriginalGameMode");
+
+        DataAttachments.ReturnPositionData returnData = player.getData(DataAttachments.RETURN_POSITION);
+        BlockPos returnPos = returnData.hasReturnData() ? returnData.getReturnPosition() : new BlockPos(0, 64, 0);
+        ResourceKey<Level> returnDimKey = returnData.hasReturnData() ? returnData.getReturnDimension() : Level.OVERWORLD;
+        returnData.clear();
+
+        ServerLevel returnLevel = player.server.getLevel(returnDimKey);
+        if (returnLevel == null) returnLevel = player.server.getLevel(Level.OVERWORLD);
+        if (returnLevel == null) {
+            LOGGER.error("Emergency exit failed: cannot find return level for {}", player.getName().getString());
+            return;
+        }
+
+        player.changeDimension(new net.minecraft.world.level.portal.DimensionTransition(
+                returnLevel, returnPos.getCenter(), player.getDeltaMovement(),
+                yRot, xRot, net.minecraft.world.level.portal.DimensionTransition.DO_NOTHING));
+        LOGGER.warn("Emergency exit executed for {} (Dimensional wrapper not loaded)", player.getName().getString());
+    }
+
     public static void cleanupAllForSave() {
         LOGGER.info("Cleaning up {} dimensional wrappers before save", WRAPPERS.size());
         for (Dimensional wrapper : WRAPPERS.values()) {
             wrapper.cleanupForSave();
         }
     }
-    
-    private static int getNextAvailableDimensionIndex(MinecraftServer server) {
-        // Check existing dimensions to find the next available index
-        int maxIndex = -1;
-        
-        // Check for existing voidspace dimensions
-        for (int i = 0; i < 1000; i++) { // Check up to 1000 dimensions (should be more than enough)
-            String dimensionName = "voidspace_" + i;
-            ResourceLocation dimensionLocation = ResourceLocation.fromNamespaceAndPath(VoidSpaces.MODID, dimensionName);
-            ResourceKey<Level> dimensionKey = ResourceKey.create(Registries.DIMENSION, dimensionLocation);
-            
-            ServerLevel existingLevel = server.getLevel(dimensionKey);
-            if (existingLevel != null) {
-                maxIndex = Math.max(maxIndex, i);
-                LOGGER.debug("Found existing dimension: voidspace_{}", i);
-            } else {
-                // Found the first non-existing index, this is our next available index
-                LOGGER.info("Next available dimension index: {} (max existing: {})", i, maxIndex);
-                return i;
+
+    // -------------------------------------------------------------------------
+    // Getters
+    // -------------------------------------------------------------------------
+
+    public int getChunkSize() {
+        return chunkSize;
+    }
+
+    public boolean isSimulating() {
+        return simulating;
+    }
+
+    public int getSimulationSpeed() {
+        return simulationSpeed;
+    }
+
+    public int getRandomTickSpeed() {
+        return dimensionLevel.getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_RANDOMTICKING).get();
+    }
+
+    /** Sets the randomTickSpeed gamerule ONLY on this void dimension's level — never touches other levels. */
+    public void setRandomTickSpeed(int speed) {
+        int clamped = Math.max(0, Math.min(4096, speed));
+        dimensionLevel.getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_RANDOMTICKING).set(clamped, server);
+        LOGGER.info("Set randomTickSpeed={} on dimension {}", clamped, dimension.location());
+    }
+
+    /** Sets the tick rate multiplier for this dimension (always-on, not just during simulation). */
+    public void setTickRate(int rate) {
+        simulationSpeed = Math.max(1, rate);
+        LOGGER.info("Set tick rate multiplier={}x on dimension {}", simulationSpeed, dimension.location());
+    }
+
+    // -------------------------------------------------------------------------
+    // Auto-unload
+    // -------------------------------------------------------------------------
+
+    public void tickUnloadCheck() {
+        if (simulating || simulationSpeed > 1) {
+            emptyTicks = 0; // never auto-unload while running at elevated tick rate
+            return;
+        }
+        if (dimensionLevel.players().isEmpty()) {
+            emptyTicks++;
+            if (emptyTicks >= UNLOAD_GRACE_TICKS) {
+                LOGGER.info("Auto-unloading dimension {} (empty for {} ticks)", dimension.location(), emptyTicks);
+                WRAPPERS.remove(dimension);
+                InfiniverseAPI.get().markDimensionForUnregistration(server, dimension);
             }
+        } else {
+            emptyTicks = 0;
         }
-        
-        // Fallback: return maxIndex + 1 if somehow we checked all 1000
-        int nextIndex = maxIndex + 1;
-        LOGGER.warn("Checked 1000 dimensions, using fallback index: {}", nextIndex);
-        return nextIndex;
     }
 
-    private LevelStem createLevel(MinecraftServer server, DimensionTypeOptions typeOption) {
-        DynamicOps<Tag> ops = RegistryOps.create(NbtOps.INSTANCE, server.registryAccess());
-        Holder<DimensionType> typeHolder;
-        ChunkGenerator chunkGenerator;
-        switch (typeOption) {
-            case OVERWORLD:
-                ServerLevel overworld = server.overworld();
-                typeHolder = overworld.dimensionTypeRegistration();
-                chunkGenerator = copyChunkGenerator(overworld, ops);
-                break;
+    // -------------------------------------------------------------------------
+    // Simulation
+    // -------------------------------------------------------------------------
 
-            case NETHER:
-                ServerLevel nether = server.getLevel(Level.NETHER);
-                if (nether == null) throw new RuntimeException("Nether dimension is not available!");
-                typeHolder = nether.dimensionTypeRegistration();
-                chunkGenerator = copyChunkGenerator(nether, ops);
-                break;
-
-            case END:
-                ServerLevel end = server.getLevel(Level.END);
-                if (end == null) throw new RuntimeException("End dimension is not available!");
-                typeHolder = end.dimensionTypeRegistration();
-                chunkGenerator = copyChunkGenerator(end, ops);
-                break;
-
-            case SINGLE:
-                Holder<Biome> singleBiome = server.registryAccess().registryOrThrow(Registries.BIOME).getHolderOrThrow(Biomes.DESERT);
-                BiomeSource biomeSource = new FixedBiomeSource(singleBiome);
-                Holder<NoiseGeneratorSettings> noiseSettings = server.registryAccess().registryOrThrow(Registries.NOISE_SETTINGS).getHolderOrThrow(NoiseGeneratorSettings.OVERWORLD);
-
-                typeHolder = server.registryAccess().registryOrThrow(Registries.DIMENSION_TYPE).getHolderOrThrow(BuiltinDimensionTypes.OVERWORLD);
-                chunkGenerator = new NoiseBasedChunkGenerator(
-                        biomeSource,
-                        noiseSettings
-                );
-                break;
-
-            case FLAT:
-                FlatLevelGeneratorSettings flatSettings = new FlatLevelGeneratorSettings(
-                        Optional.empty(),
-                        server.registryAccess().registryOrThrow(Registries.BIOME).getHolderOrThrow(Biomes.THE_VOID),
-                        List.of()
-                );
-                flatSettings.getLayers().clear();
-                flatSettings.getLayersInfo().clear();
-                flatSettings.getLayersInfo().addFirst(new FlatLayerInfo(1, Blocks.BEDROCK));
-                flatSettings.getLayers().addFirst(Blocks.BEDROCK.defaultBlockState());
-                FlatLevelSource levelSource = new FlatLevelSource(flatSettings);
-                typeHolder = server.registryAccess().registryOrThrow(Registries.DIMENSION_TYPE).getHolderOrThrow(BuiltinDimensionTypes.OVERWORLD);
-                chunkGenerator = (ChunkGenerator)levelSource;
-                break;
-
-            default:
-                throw new IllegalArgumentException("Unknown Dimension Type Option: " + typeOption);
-        }
-        return new LevelStem(typeHolder, chunkGenerator);
+    public void startSimulation(int speed) {
+        if (simulating) stopSimulation();
+        simulationSpeed = Math.max(1, speed);
+        simulating = true;
+        simTotalTicks = 0;
+        simRealTicks = 0;
+        // Snapshot InPort/OutPort baselines
+        forEachAccessibleChunk((cx, cz) -> {
+            LevelChunk chunk = dimensionLevel.getChunk(cx, cz);
+            chunk.getBlockEntities().values().forEach(be -> {
+                if (be instanceof VoidInPortEntity port) port.startSimulation();
+                if (be instanceof VoidOutPortEntity port) port.startSimulation();
+            });
+        });
+        LOGGER.info("Started simulation speed={}x randomTickSpeed={} on dimension {}",
+                    speed, getRandomTickSpeed(), dimension.location());
+        // Send an immediate packet so the GUI shows "running" state right away
+        collectAndSendSimData(this.server);
     }
 
-    private ChunkGenerator copyChunkGenerator(ServerLevel level, DynamicOps<Tag> ops) {
-        ChunkGenerator oldChunkGenerator = level.getChunkSource().getGenerator();
-        return ChunkGenerator.CODEC.encodeStart(ops, oldChunkGenerator)
-                .flatMap(nbt -> ChunkGenerator.CODEC.parse(ops, nbt))
-                .getOrThrow(s -> new RuntimeException(String.format("Error copying chunk generator: %s", s)));
-    }
-
-    private enum DimensionTypeOptions {
-        OVERWORLD,
-        NETHER,
-        END,
-        SINGLE,
-        FLAT
-    }
-
-    private void ensureWorldBorderSynced() {
-        // Send initialization packets to all players in the dimension
-        // The actual world border is handled inherently by DimensionalLevel.getWorldBorder()
-        this.dimensionLevel.getServer().execute(() -> {
-            for (ServerPlayer player : this.dimensionLevel.players()) {
-                if (player.connection != null) {
-                    // Send initialization packet to ensure client sync
-                    player.connection.send(new ClientboundInitializeBorderPacket(this.dimensionLevel.getWorldBorder()));
-                    LOGGER.info("Synced inherent world border for player: {}", player.getName().getString());
+    /**
+     * Called from EntityJoinLevelEvent when an item entity spawns in this dimension
+     * while simulation is active. Routes the item directly to the first OutPort found
+     * in accessible chunks, bypassing entity ticking entirely.
+     */
+    public void captureSimulationItem(ItemStack stack) {
+        if (!simulating || stack.isEmpty()) return;
+        LOGGER.info("[SimCapture] Routing {} x{} in {}", stack.getDescriptionId(), stack.getCount(), dimension.location());
+        for (int cx = 0; cx < chunkSize; cx++) {
+            for (int cz = 0; cz < chunkSize; cz++) {
+                LevelChunk chunk = dimensionLevel.getChunk(cx, cz);
+                for (var be : chunk.getBlockEntities().values()) {
+                    if (be instanceof VoidOutPortEntity port) {
+                        port.setItem(0, stack);
+                        return;
+                    }
                 }
             }
-        });
-        LOGGER.info("World border synced for dimension: center={}, size={}", this.dimensionLevel.getWorldBorder().getCenterX(), this.dimensionLevel.getWorldBorder().getSize());
+        }
+        LOGGER.warn("[SimCapture] No OutPort found for {} in {}", stack.getDescriptionId(), dimension.location());
     }
 
-    // World border is now inherent to DimensionalLevel - no manual reset needed
+    public void stopSimulation() {
+        simulating = false;
+        forEachAccessibleChunk((cx, cz) -> {
+            LevelChunk chunk = dimensionLevel.getChunk(cx, cz);
+            chunk.getBlockEntities().values().forEach(be -> {
+                if (be instanceof VoidInPortEntity port) port.stopSimulation();
+                if (be instanceof VoidOutPortEntity port) port.stopSimulation();
+            });
+        });
+        LOGGER.info("Stopped simulation on dimension {} after {} sim-ticks ({} real-ticks)",
+                    dimension.location(), simTotalTicks, simRealTicks);
+    }
+
+    /**
+     * Called from ServerTickEvent.Post at LOWEST priority every game tick.
+     * Runs (simulationSpeed - 1) extra full level ticks so block entities (hoppers,
+     * dispensers), random ticks (crops), scheduled ticks (redstone), and entity ticks
+     * (spawners, mobs) all advance at the configured multiplier — always-on, not just
+     * during tracked simulation runs.
+     */
+    public void tickSimulationExtra(MinecraftServer server) {
+        int extraTicks = simulationSpeed - 1;
+        // Loop simply does not execute when extraTicks == 0; tracking still runs below when simulating
+
+        for (int i = 0; i < extraTicks; i++) {
+            try {
+                dimensionLevel.tick(() -> true);
+            } catch (Exception e) {
+                LOGGER.error("Error during extra tick on {}", dimension.location(), e);
+            }
+        }
+
+        // Only advance tracking counters and send data while a formal simulation is active
+        if (simulating) {
+            simTotalTicks += simulationSpeed;
+            simRealTicks++;
+            if (simRealTicks % 20 == 0) {
+                collectAndSendSimData(server);
+            }
+        }
+    }
+
+    private void collectAndSendSimData(MinecraftServer server) {
+        Map<Item, Long> consumed = new HashMap<>();
+        Map<Item, Long> produced = new HashMap<>();
+
+        forEachAccessibleChunk((cx, cz) -> {
+            LevelChunk chunk = dimensionLevel.getChunk(cx, cz);
+            int beCount = chunk.getBlockEntities().size();
+            int outPortCount = 0;
+            for (var be : chunk.getBlockEntities().values()) {
+                if (be instanceof VoidInPortEntity port) {
+                    port.getSimulationConsumed().forEach((item, count) ->
+                            consumed.merge(item, count, Long::sum));
+                }
+                if (be instanceof VoidOutPortEntity port) {
+                    outPortCount++;
+                    Map<Item, Long> portProduced = port.getSimulationProduced();
+                    LOGGER.info("[Sim] OutPort at {} baseline={} total={} delta={}",
+                            be.getBlockPos(),
+                            port.getSimBaseline(),
+                            port.getTotalInserted(),
+                            portProduced);
+                    portProduced.forEach((item, count) ->
+                            produced.merge(item, count, Long::sum));
+                }
+            }
+            LOGGER.info("[Sim] Chunk ({},{}) has {} block entities, {} OutPorts", cx, cz, beCount, outPortCount);
+        });
+
+        List<SimulationDataPacket.PortEntry> consumedList = new ArrayList<>();
+        consumed.forEach((item, count) -> consumedList.add(
+                new SimulationDataPacket.PortEntry(new ItemStack(item), count)));
+
+        List<SimulationDataPacket.PortEntry> producedList = new ArrayList<>();
+        produced.forEach((item, count) -> producedList.add(
+                new SimulationDataPacket.PortEntry(new ItemStack(item), count)));
+
+        LOGGER.info("[Sim] Sending data: simTicks={} produced={}", simTotalTicks, produced);
+
+        SimulationDataPacket packet = new SimulationDataPacket(
+                simTotalTicks, simRealTicks, simulationSpeed, consumedList, producedList);
+
+        ServerPlayer ownerPlayer = server.getPlayerList().getPlayer(owner);
+        if (ownerPlayer != null) {
+            PacketDistributor.sendToPlayer(ownerPlayer, packet);
+        } else {
+            LOGGER.warn("[Sim] Owner player {} not online, cannot send sim data", owner);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Teleport in/out
+    // -------------------------------------------------------------------------
 
     public void teleportIn(ServerPlayer player) {
-        ServerLevel dimensionLevel = server.getLevel(this.dimension);
-        if (dimensionLevel == null) {
-            throw new IllegalStateException("Custom dimension not loaded!");
-        }
-        
-        // Store the player's current position and dimension for return using Data Attachments
+        ServerLevel level = server.getLevel(dimension);
+        if (level == null) throw new IllegalStateException("Void dimension not loaded!");
+
         DataAttachments.ReturnPositionData returnData = player.getData(DataAttachments.RETURN_POSITION);
         returnData.setReturnPosition(player.blockPosition());
         returnData.setReturnDimension(player.level().dimension());
-        
-        // Also store in memory maps for immediate use
         returnPositions.put(player, player.blockPosition());
         returnDimensions.put(player, player.level().dimension());
-        
-        // Also store as owner return position for persistence
-        if (player.getUUID().equals(this.owner)) {
-            this.ownerReturnPosition = player.blockPosition();
-            this.ownerReturnDimension = player.level().dimension();
+
+        if (player.getUUID().equals(owner)) {
+            ownerReturnPosition = player.blockPosition();
+            ownerReturnDimension = player.level().dimension();
         }
-        
-        // Teleport to center of chunk 0 (chunk 0 goes from 0,0 to 15,15, so center is at 7.5,7.5)
-        // We'll use coordinates 7.5, -62, 7.5 to center the player in chunk 0
-        player.teleportTo(dimensionLevel, 7.5, -62, 7.5, null, player.getYRot(), player.getXRot());
-        
-        // Sync the inherent world border with the player
-        this.ensureWorldBorderForPlayer(player);
-        
-        this.setBuilderMode(player, true);
+
+        // Center of accessible area, one block above the bedrock floor
+        double cx = chunkSize * 8.0 - 0.5;
+        double cz = chunkSize * 8.0 - 0.5;
+        double y = level.getMinBuildHeight() + 2.0;
+        player.teleportTo(level, cx, y, cz, null, player.getYRot(), player.getXRot());
+
+        ensureWorldBorderForPlayer(player);
+        setBuilderMode(player, true);
     }
 
     public void teleportOut(ServerPlayer player) {
-        // Remove border listener first to prevent save issues
         if (borderListeners.containsKey(player)) {
-            this.dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));
+            dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));
             borderListeners.remove(player);
-            LOGGER.info("Removed border change listener for player: {}", player.getName().getString());
         }
-        
-        // Try to get return position from memory maps first, then from Data Attachments
+
         BlockPos returnPos = returnPositions.get(player);
         ResourceKey<Level> returnDimension = returnDimensions.get(player);
-        
+
         if (returnPos == null || returnDimension == null) {
-            // Try to get from Data Attachments (persistent storage)
             DataAttachments.ReturnPositionData returnData = player.getData(DataAttachments.RETURN_POSITION);
             if (returnData.hasReturnData()) {
                 returnPos = returnData.getReturnPosition();
                 returnDimension = returnData.getReturnDimension();
-                // Restore to memory maps
                 returnPositions.put(player, returnPos);
                 returnDimensions.put(player, returnDimension);
-                LOGGER.info("Restored return position from Data Attachments for player: {}", player.getName().getString());
-            } else if (player.getUUID().equals(this.owner) && this.ownerReturnPosition != null && this.ownerReturnDimension != null) {
-                // Try owner return position from NBT
-                returnPos = this.ownerReturnPosition;
-                returnDimension = this.ownerReturnDimension;
-                LOGGER.info("Using owner return position from NBT for player: {}", player.getName().getString());
+            } else if (player.getUUID().equals(owner) && ownerReturnPosition != null) {
+                returnPos = ownerReturnPosition;
+                returnDimension = ownerReturnDimension;
             } else {
-                // Fallback to overworld spawn
-                LOGGER.warn("No return position found for player: {}, defaulting to overworld spawn", player.getName().getString());
+                LOGGER.warn("No return position for player {}, defaulting to overworld spawn", player.getName().getString());
                 returnPos = new BlockPos(0, 64, 0);
                 returnDimension = Level.OVERWORLD;
             }
         }
+
         ServerLevel returnLevel = server.getLevel(returnDimension);
         if (returnLevel == null) {
-            LOGGER.warn("Return dimension not found, defaulting to overworld!");
             returnLevel = server.getLevel(Level.OVERWORLD);
-            if (returnLevel == null) {
-                throw new IllegalStateException("Overworld not loaded!");
-            }
+            if (returnLevel == null) throw new IllegalStateException("Overworld not loaded!");
         }
-        // No manual world border reset needed - handled inherently by DimensionalLevel
-        
-        // Use changeDimension instead of teleportTo to avoid respawn packet encoding issues
-        if (returnLevel.dimension() != player.level().dimension()) {
+
+        if (!returnLevel.dimension().equals(player.level().dimension())) {
             player.changeDimension(new net.minecraft.world.level.portal.DimensionTransition(
-                returnLevel, 
-                returnPos.getCenter(), 
-                player.getDeltaMovement(), 
-                player.getYRot(), 
-                player.getXRot(),
-                net.minecraft.world.level.portal.DimensionTransition.DO_NOTHING
+                    returnLevel,
+                    returnPos.getCenter(),
+                    player.getDeltaMovement(),
+                    player.getYRot(),
+                    player.getXRot(),
+                    net.minecraft.world.level.portal.DimensionTransition.DO_NOTHING
             ));
         } else {
-            // Same dimension, just teleport normally
             player.teleportTo(returnPos.getX(), returnPos.getY(), returnPos.getZ());
         }
-        this.setBuilderMode(player, false);
-        this.machine = Space.extractContents(this.dimensionLevel, new ChunkPos(0, 0));
+
+        setBuilderMode(player, false);
+        // Snapshot machine contents from all accessible chunks
+        machine = Space.extractAllContents(dimensionLevel, chunkSize);
         returnPositions.remove(player);
         returnDimensions.remove(player);
-        
-        // Clear Data Attachments
+
         DataAttachments.ReturnPositionData returnData = player.getData(DataAttachments.RETURN_POSITION);
         returnData.clear();
     }
 
     public void restoreOwnerReturnPosition(ServerPlayer player) {
-        // Always ensure world border is properly synced for any player in this dimension
-        this.ensureWorldBorderForPlayer(player);
-        
-        if (player.getUUID().equals(this.owner)) {
-            // Check if we already have return data for this player
+        ensureWorldBorderForPlayer(player);
+        if (player.getUUID().equals(owner)) {
             DataAttachments.ReturnPositionData returnData = player.getData(DataAttachments.RETURN_POSITION);
-            
-            if (!returnData.hasReturnData() && this.ownerReturnPosition != null && this.ownerReturnDimension != null) {
-                // Restore from NBT data if Data Attachments are empty
-                returnPositions.put(player, this.ownerReturnPosition);
-                returnDimensions.put(player, this.ownerReturnDimension);
-                
-                // Also update Data Attachments for consistency
-                returnData.setReturnPosition(this.ownerReturnPosition);
-                returnData.setReturnDimension(this.ownerReturnDimension);
-                
-                LOGGER.info("Restored owner return position from NBT: {} in dimension {}", this.ownerReturnPosition, this.ownerReturnDimension);
+            if (!returnData.hasReturnData() && ownerReturnPosition != null && ownerReturnDimension != null) {
+                returnPositions.put(player, ownerReturnPosition);
+                returnDimensions.put(player, ownerReturnDimension);
+                returnData.setReturnPosition(ownerReturnPosition);
+                returnData.setReturnDimension(ownerReturnDimension);
             } else if (returnData.hasReturnData()) {
-                // Restore from Data Attachments
                 returnPositions.put(player, returnData.getReturnPosition());
                 returnDimensions.put(player, returnData.getReturnDimension());
-                LOGGER.info("Restored return position from Data Attachments: {} in dimension {}", returnData.getReturnPosition(), returnData.getReturnDimension());
-            } else {
-                LOGGER.warn("No return position data available for owner: {}", player.getName().getString());
             }
         }
     }
-    
-    public void ensureWorldBorderForPlayer(ServerPlayer player) {
-        // Make sure the inherent world border is synced for this specific player
-        if (player.level() == this.dimensionLevel && player.connection != null) {
-            // Force the world border to be initialized by accessing it
-            WorldBorder border = this.dimensionLevel.getWorldBorder();
-            
-            LOGGER.info("Starting world border sync for player: {} (dimension type: {}, border center: {}, {}, size: {}, damage: {}, warning: {})", 
-                       player.getName().getString(),
-                       this.dimensionLevel.getClass().getSimpleName(),
-                       border.getCenterX(),
-                       border.getCenterZ(),
-                       border.getSize(),
-                       border.getDamagePerBlock(),
-                       border.getWarningBlocks());
-            
-            // Add a border change listener to track when border changes are detected
-            this.addBorderListenerForPlayer(player);
-            
-            // Send the border packets with proper timing (player should be fully loaded at this point)
-            this.sendBorderPacketsToPlayer(player, border, 0);
-        }
-    }
-    
-    private void sendBorderPacketsToPlayer(ServerPlayer player, WorldBorder border, int delay) {
-        LOGGER.info("Sending world border packets to player: {} at delay {} ticks", player.getName().getString(), delay);
-        
-        try {
-            player.connection.send(new ClientboundInitializeBorderPacket(border));
-            LOGGER.info("Sent ClientboundInitializeBorderPacket to {}", player.getName().getString());
-            
-            player.connection.send(new ClientboundSetBorderCenterPacket(border));
-            LOGGER.info("Sent ClientboundSetBorderCenterPacket to {} (center: {}, {})", 
-                       player.getName().getString(), border.getCenterX(), border.getCenterZ());
-            
-            player.connection.send(new ClientboundSetBorderSizePacket(border));
-            LOGGER.info("Sent ClientboundSetBorderSizePacket to {} (size: {})", 
-                       player.getName().getString(), border.getSize());
-            
-            player.connection.send(new ClientboundSetBorderWarningDelayPacket(border));
-            LOGGER.info("Sent ClientboundSetBorderWarningDelayPacket to {}", player.getName().getString());
-            
-            player.connection.send(new ClientboundSetBorderWarningDistancePacket(border));
-            LOGGER.info("Sent ClientboundSetBorderWarningDistancePacket to {} (warning blocks: {})", 
-                       player.getName().getString(), border.getWarningBlocks());
-            
-        } catch (Exception e) {
-            LOGGER.error("Failed to send world border packets to player: {}", player.getName().getString(), e);
-        }
-    }
-    
-    private void addBorderListenerForPlayer(ServerPlayer player) {
-        // Remove existing listener if any
-        if (borderListeners.containsKey(player)) {
-            this.dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));
-        }
-        
-        BorderChangeListener listener = new BorderChangeListener() {
-            @Override
-            public void onBorderSizeSet(WorldBorder border, double size) {
-                LOGGER.info("Border size changed for player {}: {}", player.getName().getString(), size);
-            }
 
-            @Override
-            public void onBorderSizeLerping(WorldBorder border, double oldSize, double newSize, long time) {
-                LOGGER.info("Border size lerping for player {}: {} -> {} over {} ticks", 
-                           player.getName().getString(), oldSize, newSize, time);
-            }
-
-            @Override
-            public void onBorderCenterSet(WorldBorder border, double x, double z) {
-                LOGGER.info("Border center changed for player {}: {}, {}", player.getName().getString(), x, z);
-            }
-
-            @Override
-            public void onBorderSetWarningTime(WorldBorder border, int warningTime) {
-                LOGGER.info("Border warning time changed for player {}: {}", player.getName().getString(), warningTime);
-            }
-
-            @Override
-            public void onBorderSetWarningBlocks(WorldBorder border, int warningBlocks) {
-                LOGGER.info("Border warning blocks changed for player {}: {}", player.getName().getString(), warningBlocks);
-            }
-
-            @Override
-            public void onBorderSetDamagePerBlock(WorldBorder border, double damagePerBlock) {
-                LOGGER.info("Border damage per block changed for player {}: {}", player.getName().getString(), damagePerBlock);
-            }
-
-            @Override
-            public void onBorderSetDamageSafeZOne(WorldBorder border, double safeZone) {
-                LOGGER.info("Border damage safe zone changed for player {}: {}", player.getName().getString(), safeZone);
-            }
-        };
-
-        this.dimensionLevel.getWorldBorder().addListener(listener);
-        borderListeners.put(player, listener);
-        LOGGER.info("Added border change listener for player: {}", player.getName().getString());
-    }
-
-    public CompoundTag saveReturnData() {
-        CompoundTag tag = new CompoundTag();
-        if (this.ownerReturnPosition != null) {
-            tag.putLong("ownerReturnPos", this.ownerReturnPosition.asLong());
-        }
-        if (this.ownerReturnDimension != null) {
-            tag.putString("ownerReturnDim", this.ownerReturnDimension.location().toString());
-        }
-        
-        // World border is now inherent to DimensionalLevel - no need to save
-        
-        return tag;
-    }
-
-    public void loadReturnData(CompoundTag tag) {
-        if (tag.contains("ownerReturnPos")) {
-            this.ownerReturnPosition = BlockPos.of(tag.getLong("ownerReturnPos"));
-        }
-        if (tag.contains("ownerReturnDim")) {
-            try {
-                ResourceLocation dimLocation = ResourceLocation.parse(tag.getString("ownerReturnDim"));
-                this.ownerReturnDimension = ResourceKey.create(Registries.DIMENSION, dimLocation);
-            } catch (Exception e) {
-                LOGGER.warn("Failed to parse owner return dimension: {}", tag.getString("ownerReturnDim"));
-            }
-        }
-        
-        // World border is now inherent to DimensionalLevel - no need to load
-        // Ensure any players currently in this dimension see the inherent world border with proper delay
-        for (ServerPlayer player : this.dimensionLevel.players()) {
-            if (player.connection != null) {
-                // Use delayed sync to ensure client is ready
-                this.ensureWorldBorderForPlayer(player);
-            }
-        }
-        LOGGER.info("Scheduled world border sync for all players in dimension");
-    }
+    // -------------------------------------------------------------------------
+    // Builder mode (item isolation)
+    // -------------------------------------------------------------------------
 
     private void setBuilderMode(ServerPlayer player, boolean enabled) {
         if (enabled) {
-            // Save complete player data (includes all modded inventories like Curios, Cosmetic Armor, etc.)
             CompoundTag playerData = new CompoundTag();
             player.saveWithoutId(playerData);
             player.getPersistentData().put("VoidSpaces_SavedPlayerData", playerData);
-            player.getPersistentData().putString("VoidSpaces_OriginalGameMode", player.gameMode.getGameModeForPlayer().getName());
+            player.getPersistentData().putString("VoidSpaces_OriginalGameMode",
+                    player.gameMode.getGameModeForPlayer().getName());
 
-            // Clear inventory and set creative mode
+            // Clear vanilla inventory
             player.getInventory().clearContent();
+
+            // Clear modded inventories (handles Curios, Baubles, and similar)
+            try {
+                IItemHandler extraHandler = player.getCapability(
+                        Capabilities.ItemHandler.ENTITY, null);
+                if (extraHandler != null) {
+                    for (int i = 0; i < extraHandler.getSlots(); i++) {
+                        extraHandler.extractItem(i, Integer.MAX_VALUE, false);
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Could not clear modded inventory capabilities for {}", player.getName().getString(), e);
+            }
+
             player.setGameMode(GameType.CREATIVE);
             player.getAbilities().instabuild = true;
             player.getAbilities().flying = true;
             player.getAbilities().invulnerable = true;
             player.getAbilities().mayBuild = true;
-
-            // Prevent dimension travel
             player.getPersistentData().putBoolean("VoidSpaces_InDimension", true);
-
-            LOGGER.info("Enabled builder mode for player: {} (full NBT saved)", player.getName().getString());
         } else {
-            // Save current position before restoring NBT (so we don't teleport back)
-            double x = player.getX();
-            double y = player.getY();
-            double z = player.getZ();
-            float yRot = player.getYRot();
-            float xRot = player.getXRot();
-
-            // Read game mode BEFORE load wipes persistent data
+            double x = player.getX(), y = player.getY(), z = player.getZ();
+            float yRot = player.getYRot(), xRot = player.getXRot();
             String originalGameMode = player.getPersistentData().getString("VoidSpaces_OriginalGameMode");
 
-            // Clear any items obtained in the dimension
             player.getInventory().clearContent();
 
-            // Restore complete player data (includes all modded inventories)
             if (player.getPersistentData().contains("VoidSpaces_SavedPlayerData")) {
                 CompoundTag playerData = player.getPersistentData().getCompound("VoidSpaces_SavedPlayerData");
                 player.load(playerData);
-                // Note: persistent data is now overwritten by load, but we already have originalGameMode
-                LOGGER.info("Restored full player NBT for: {}", player.getName().getString());
             }
 
-            // Restore position (don't let NBT teleport us back to entry location)
             player.setPos(x, y, z);
             player.setYRot(yRot);
             player.setXRot(xRot);
 
-            // Restore game mode using the value we read before load
             GameType gameType = GameType.SURVIVAL;
-            try {
-                if (!originalGameMode.isEmpty()) {
-                    gameType = GameType.byName(originalGameMode, GameType.SURVIVAL);
-                }
-            } catch (Exception e) {
-                LOGGER.warn("Failed to restore game mode: {}", originalGameMode);
+            if (!originalGameMode.isEmpty()) {
+                gameType = GameType.byName(originalGameMode, GameType.SURVIVAL);
             }
             player.setGameMode(gameType);
             player.getAbilities().instabuild = false;
             player.getAbilities().flying = false;
             player.getAbilities().invulnerable = false;
 
-            // Clear dimension flag
             player.getPersistentData().remove("VoidSpaces_InDimension");
             player.getPersistentData().remove("VoidSpaces_OriginalGameMode");
-
-            LOGGER.info("Disabled builder mode for player: {}", player.getName().getString());
         }
         player.onUpdateAbilities();
     }
 
+    // -------------------------------------------------------------------------
+    // World border
+    // -------------------------------------------------------------------------
+
+    public void ensureWorldBorderForPlayer(ServerPlayer player) {
+        if (player.level() == dimensionLevel && player.connection != null) {
+            WorldBorder border = dimensionLevel.getWorldBorder();
+            LOGGER.info("Syncing world border for {} in {} (size={})",
+                        player.getName().getString(), dimension.location(), border.getSize());
+            addBorderListenerForPlayer(player);
+            sendBorderPacketsToPlayer(player, border);
+        }
+    }
+
+    private void sendBorderPacketsToPlayer(ServerPlayer player, WorldBorder border) {
+        try {
+            player.connection.send(new ClientboundInitializeBorderPacket(border));
+            player.connection.send(new ClientboundSetBorderCenterPacket(border));
+            player.connection.send(new ClientboundSetBorderSizePacket(border));
+            player.connection.send(new ClientboundSetBorderWarningDelayPacket(border));
+            player.connection.send(new ClientboundSetBorderWarningDistancePacket(border));
+        } catch (Exception e) {
+            LOGGER.error("Failed to send border packets to {}", player.getName().getString(), e);
+        }
+    }
+
+    private void addBorderListenerForPlayer(ServerPlayer player) {
+        if (borderListeners.containsKey(player)) {
+            dimensionLevel.getWorldBorder().removeListener(borderListeners.get(player));
+        }
+        BorderChangeListener listener = new BorderChangeListener() {
+            @Override public void onBorderSizeSet(WorldBorder b, double size) {}
+            @Override public void onBorderSizeLerping(WorldBorder b, double o, double n, long t) {}
+            @Override public void onBorderCenterSet(WorldBorder b, double x, double z) {}
+            @Override public void onBorderSetWarningTime(WorldBorder b, int t) {}
+            @Override public void onBorderSetWarningBlocks(WorldBorder b, int blocks) {}
+            @Override public void onBorderSetDamagePerBlock(WorldBorder b, double dmg) {}
+            @Override public void onBorderSetDamageSafeZOne(WorldBorder b, double zone) {}
+        };
+        dimensionLevel.getWorldBorder().addListener(listener);
+        borderListeners.put(player, listener);
+    }
+
+    // -------------------------------------------------------------------------
+    // Clear / save / load
+    // -------------------------------------------------------------------------
+
     public void clear() {
-        ChunkPos root = new ChunkPos(0, 0);
-        int minX = root.getMinBlockX();
-        int maxX = root.getMaxBlockX();
-        int minZ = root.getMinBlockZ();
-        int maxZ = root.getMaxBlockZ();
-        int minY = this.dimensionLevel.getMinBuildHeight();
-        int maxY = this.dimensionLevel.getMaxBuildHeight();
+        forEachAccessibleChunk((cx, cz) -> {
+            ChunkPos root = new ChunkPos(cx, cz);
+            int minX = root.getMinBlockX(), maxX = root.getMaxBlockX();
+            int minZ = root.getMinBlockZ(), maxZ = root.getMaxBlockZ();
+            int minY = dimensionLevel.getMinBuildHeight();
+            int maxY = dimensionLevel.getMaxBuildHeight();
 
-        BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
-        for (int x = minX; x <= maxX; x++) {
-            for (int z = minZ; z <= maxZ; z++) {
-                for (int y = minY; y < maxY; y++) {
-                    mutablePos.set(x, y, z);
-
-                    if (y == minY) {
-                        this.dimensionLevel.setBlock(mutablePos, Blocks.BEDROCK.defaultBlockState(), 3);
-                    } else {
-                        this.dimensionLevel.setBlock(mutablePos, Blocks.AIR.defaultBlockState(), 3);
+            BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+            for (int x = minX; x <= maxX; x++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    for (int y = minY; y < maxY; y++) {
+                        mutablePos.set(x, y, z);
+                        dimensionLevel.setBlock(mutablePos,
+                                y == minY ? Blocks.BEDROCK.defaultBlockState() : Blocks.AIR.defaultBlockState(), 3);
                     }
                 }
             }
-        }
-        LevelChunk chunk = this.dimensionLevel.getChunk(root.x, root.z);
-        chunk.getBlockEntities().keySet().forEach(this.dimensionLevel::removeBlockEntity);
-        AABB chunkBoundingBox = new AABB(root.getMinBlockX(), minY, root.getMinBlockZ(), root.getMaxBlockX() + 1, maxY, root.getMaxBlockZ() + 1);
-        this.dimensionLevel.getEntities().get(chunkBoundingBox, entity -> entity.remove(Entity.RemovalReason.DISCARDED));
-        this.machine = new SpaceContents();
-        chunk.setUnsaved(true);
+            LevelChunk chunk = dimensionLevel.getChunk(root.x, root.z);
+            chunk.getBlockEntities().keySet().forEach(dimensionLevel::removeBlockEntity);
+            AABB bb = new AABB(root.getMinBlockX(), minY, root.getMinBlockZ(),
+                               root.getMaxBlockX() + 1, maxY, root.getMaxBlockZ() + 1);
+            dimensionLevel.getEntities().get(bb, entity -> entity.remove(Entity.RemovalReason.DISCARDED));
+            chunk.setUnsaved(true);
+        });
+        machine = new Space.SpaceContents();
     }
-    
+
     public void cleanupForSave() {
-        // Remove all border listeners to prevent save hang
         for (Map.Entry<ServerPlayer, BorderChangeListener> entry : borderListeners.entrySet()) {
             try {
-                this.dimensionLevel.getWorldBorder().removeListener(entry.getValue());
-                LOGGER.info("Removed border listener for player {} during save cleanup", entry.getKey().getName().getString());
+                dimensionLevel.getWorldBorder().removeListener(entry.getValue());
             } catch (Exception e) {
-                LOGGER.warn("Failed to remove border listener for player {} during save cleanup", entry.getKey().getName().getString(), e);
+                LOGGER.warn("Failed to remove border listener during save cleanup", e);
             }
         }
         borderListeners.clear();
-        
-        // Force save the dimension before world save
         try {
-            this.dimensionLevel.save(null, false, false);
-            LOGGER.info("Force saved void dimension {} before world save", this.dimension.location());
+            dimensionLevel.save(null, true, false);
+            LOGGER.info("Force-saved void dimension {} before world save", dimension.location());
         } catch (Exception e) {
-            LOGGER.warn("Failed to force save void dimension {} before world save", this.dimension.location(), e);
+            LOGGER.warn("Failed to force-save void dimension {}", dimension.location(), e);
         }
     }
 
-    // Border sync is now handled inherently by DimensionalLevel
-    
+    public CompoundTag saveReturnData() {
+        CompoundTag tag = new CompoundTag();
+        if (ownerReturnPosition != null) tag.putLong("ownerReturnPos", ownerReturnPosition.asLong());
+        if (ownerReturnDimension != null) tag.putString("ownerReturnDim", ownerReturnDimension.location().toString());
+        tag.putInt("chunkSize", chunkSize);
+        return tag;
+    }
+
+    public void loadReturnData(CompoundTag tag) {
+        if (tag.contains("ownerReturnPos")) ownerReturnPosition = BlockPos.of(tag.getLong("ownerReturnPos"));
+        if (tag.contains("ownerReturnDim")) {
+            try {
+                ResourceLocation loc = ResourceLocation.parse(tag.getString("ownerReturnDim"));
+                ownerReturnDimension = ResourceKey.create(Registries.DIMENSION, loc);
+            } catch (Exception e) {
+                LOGGER.warn("Failed to parse ownerReturnDim: {}", tag.getString("ownerReturnDim"));
+            }
+        }
+        for (ServerPlayer player : dimensionLevel.players()) {
+            if (player.connection != null) ensureWorldBorderForPlayer(player);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Helper: iterate accessible chunks
+    // -------------------------------------------------------------------------
+
+    @FunctionalInterface
+    private interface ChunkConsumer {
+        void accept(int cx, int cz);
+    }
+
+    private void forEachAccessibleChunk(ChunkConsumer consumer) {
+        for (int cx = 0; cx < chunkSize; cx++) {
+            for (int cz = 0; cz < chunkSize; cz++) {
+                consumer.accept(cx, cz);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Dimension index management
+    // -------------------------------------------------------------------------
+
+    private static int getNextAvailableDimensionIndex(MinecraftServer server) {
+        for (int i = 0; i < 1000; i++) {
+            ResourceKey<Level> key = ResourceKey.create(Registries.DIMENSION,
+                    ResourceLocation.fromNamespaceAndPath(VoidSpaces.MODID, "voidspace_" + i));
+            if (server.getLevel(key) == null) {
+                LOGGER.info("Next available dimension index: {}", i);
+                return i;
+            }
+        }
+        LOGGER.warn("All 1000 dimension slots checked, using fallback");
+        return dimensionCount;
+    }
+
+    // -------------------------------------------------------------------------
+    // Level creation
+    // -------------------------------------------------------------------------
+
+    private LevelStem createLevel(MinecraftServer server, DimensionTypeOptions typeOption) {
+        DynamicOps<Tag> ops = RegistryOps.create(NbtOps.INSTANCE, server.registryAccess());
+        Holder<DimensionType> typeHolder;
+        ChunkGenerator chunkGenerator;
+
+        switch (typeOption) {
+            case FLAT: {
+                FlatLevelGeneratorSettings flatSettings = new FlatLevelGeneratorSettings(
+                        Optional.empty(),
+                        server.registryAccess().registryOrThrow(Registries.BIOME).getHolderOrThrow(Biomes.THE_VOID),
+                        List.of());
+                flatSettings.getLayers().clear();
+                flatSettings.getLayersInfo().clear();
+                flatSettings.getLayersInfo().addFirst(new FlatLayerInfo(1, Blocks.BEDROCK));
+                flatSettings.getLayers().addFirst(Blocks.BEDROCK.defaultBlockState());
+                chunkGenerator = new FlatLevelSource(flatSettings);
+                typeHolder = server.registryAccess().registryOrThrow(Registries.DIMENSION_TYPE)
+                        .getHolderOrThrow(BuiltinDimensionTypes.OVERWORLD);
+                break;
+            }
+            default:
+                throw new IllegalArgumentException("Unsupported dimension type: " + typeOption);
+        }
+        return new LevelStem(typeHolder, chunkGenerator);
+    }
+
+    private ChunkGenerator copyChunkGenerator(ServerLevel level, DynamicOps<Tag> ops) {
+        ChunkGenerator old = level.getChunkSource().getGenerator();
+        return ChunkGenerator.CODEC.encodeStart(ops, old)
+                .flatMap(nbt -> ChunkGenerator.CODEC.parse(ops, nbt))
+                .getOrThrow(s -> new RuntimeException("Error copying chunk generator: " + s));
+    }
+
+    private enum DimensionTypeOptions { FLAT }
+
+    // -------------------------------------------------------------------------
+    // Reflection world border workaround (for save-restored plain ServerLevel)
+    // -------------------------------------------------------------------------
+
     private void applyWorldBorderWorkaround(ServerLevel level) {
         try {
-            LOGGER.info("Applying world border workaround for dimension: {}", level.dimension().location());
-            
-            // Create our custom world border
-            DimensionalWorldBorder customBorder = new DimensionalWorldBorder(level);
-            
-            // Set appropriate values for chunk 0 boundaries
-            // Chunk 0 goes from 0,0 to 15,15 (16x16 blocks)
-            // World border should be exactly on chunk boundaries, so from 0,0 to 16,16 (16x16 blocks)
-            // Center should be at (7.5, 7.5) with size 16
-            customBorder.setCenter(7.5, 7.5);
-            customBorder.setSize(16.0);
-            customBorder.setDamagePerBlock(0.2);
-            customBorder.setWarningBlocks(0);  // No warning blocks - immediate damage at border
-            customBorder.setAbsoluteMaxSize(16);
-            
-            // Use reflection to replace the worldBorder field in ServerLevel
+            DimensionalWorldBorder customBorder = new DimensionalWorldBorder(level, chunkSize);
+
             Field worldBorderField = null;
-            Class<?> currentClass = level.getClass();
-            
-            // Search through the class hierarchy for the worldBorder field
-            while (currentClass != null && worldBorderField == null) {
+            Class<?> cls = level.getClass();
+            while (cls != null && worldBorderField == null) {
                 try {
-                    worldBorderField = currentClass.getDeclaredField("worldBorder");
+                    worldBorderField = cls.getDeclaredField("worldBorder");
                 } catch (NoSuchFieldException e) {
-                    // Try parent class
-                    currentClass = currentClass.getSuperclass();
+                    cls = cls.getSuperclass();
                 }
             }
-            
             if (worldBorderField != null) {
                 worldBorderField.setAccessible(true);
-                WorldBorder oldBorder = (WorldBorder) worldBorderField.get(level);
-                LOGGER.info("Found worldBorder field, replacing {} with {}", 
-                           oldBorder.getClass().getSimpleName(), 
-                           customBorder.getClass().getSimpleName());
-                
                 worldBorderField.set(level, customBorder);
-                
-                // Verify the replacement worked
-                WorldBorder newBorder = level.getWorldBorder();
-                LOGGER.info("World border replacement result - Type: {}, Size: {}", 
-                           newBorder.getClass().getSimpleName(), 
-                           newBorder.getSize());
+                LOGGER.info("Replaced world border via reflection for dimension {}", level.dimension().location());
             } else {
-                LOGGER.error("Could not find worldBorder field in ServerLevel class hierarchy");
+                LOGGER.error("Could not find worldBorder field in ServerLevel hierarchy");
             }
-            
         } catch (Exception e) {
             LOGGER.error("Failed to apply world border workaround", e);
         }

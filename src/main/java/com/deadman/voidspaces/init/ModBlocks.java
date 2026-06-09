@@ -14,6 +14,8 @@ import com.deadman.voidspaces.block.VoidDropper;
 import com.deadman.voidspaces.block.VoidInjector;
 import com.deadman.voidspaces.block.VoidStabilizer;
 import com.deadman.voidspaces.block.VoidPowerConnector;
+import com.deadman.voidspaces.block.VoidInPort;
+import com.deadman.voidspaces.block.VoidOutPort;
 import com.deadman.voidspaces.VoidSpaces;
 
 public class ModBlocks {
@@ -49,5 +51,13 @@ public class ModBlocks {
     public static final DeferredBlock<VoidPowerConnector> VOID_POWER_CONNECTOR = REGISTRY.register(
         "void_power_connector",
         () -> new VoidPowerConnector(BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_PURPLE).strength(3.0F, 4.8F))
+    );
+    public static final DeferredBlock<VoidInPort> VOID_IN_PORT = REGISTRY.register(
+        "void_in_port",
+        () -> new VoidInPort(BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_BLUE).strength(3.0F, 4.8F))
+    );
+    public static final DeferredBlock<VoidOutPort> VOID_OUT_PORT = REGISTRY.register(
+        "void_out_port",
+        () -> new VoidOutPort(BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_RED).strength(3.0F, 4.8F))
     );
 }

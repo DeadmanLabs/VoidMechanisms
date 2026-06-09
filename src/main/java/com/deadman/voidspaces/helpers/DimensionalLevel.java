@@ -11,21 +11,20 @@ import net.minecraft.world.level.border.BorderChangeListener;
 import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.storage.LevelStorageSource;
-import net.minecraft.world.level.storage.LevelStorageSource.LevelStorageAccess;
 import net.minecraft.world.level.storage.ServerLevelData;
-
 
 import java.util.List;
 import java.util.concurrent.Executor;
 
-import com.deadman.voidspaces.helpers.DimensionalWorldBorder;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class DimensionalLevel extends ServerLevel {
     private static final Logger LOGGER = LoggerFactory.getLogger(DimensionalLevel.class);
-    private DimensionalWorldBorder customWorldBorder = null; //has to be null before super is called, then intialized on first access that comes from super()
+    private DimensionalWorldBorder customWorldBorder = null;
+    private int chunkSize = 1;
+
     public DimensionalLevel(
             MinecraftServer server,
             Executor executor,
@@ -44,29 +43,36 @@ public class DimensionalLevel extends ServerLevel {
         LOGGER.info("DimensionalLevel constructed for dimension: {}", dimension.location());
     }
 
+    /**
+     * Set the chunk size for this dimension's world border.
+     * Must be called by Dimensional immediately after getOrCreateLevel().
+     * If the border was already lazily created, it will be reconfigured.
+     */
+    public void setChunkSize(int chunkSize) {
+        this.chunkSize = chunkSize;
+        if (this.customWorldBorder != null) {
+            this.customWorldBorder.configure(chunkSize);
+            LOGGER.info("Reconfigured world border for chunkSize={} on dimension: {}", chunkSize, dimension().location());
+        }
+    }
+
+    public int getChunkSize() {
+        return chunkSize;
+    }
+
     @Override
     public @NotNull WorldBorder getWorldBorder() {
         /*
-            So this is a bit stupid, so bare with me. When creating a world border specifically for a dimension, we have to override the existing (System Wide) world border.
-            We do this by overloading the world border return method (this) inside of an extension ontop of the ServerLevel class. We then initialize the world border using
-            the default system one, but then we can modify it without moving the borders in any other dimensions. Its important to note that we can ONLY modify the borders
-            of dimensions that were created using voidspaces, NOT the dimensions of any other mod INCLUDING infiniverse (because voidspaces has its own copy of infiniverse
-            inside due to modifications to the base code). We then cannot simply create the custom border in the constructor, because the super() calls for a world border
-            before it can be intialized. This is why we create the world border on the first access, because then it gets created when super() calls, and super gets the
-            custom border.
+            Lazily create a custom world border on first access.
+            The border is initialized with the current chunkSize value.
+            super() calls getWorldBorder() during construction; at that point chunkSize=1
+            (the default), which is fine — Dimensional calls setChunkSize() after level creation
+            to apply the correct size.
         */
         if (this.customWorldBorder == null) {
-            LOGGER.info("Initializing custom world border for dimension: {}", this.dimension().location());
-            this.customWorldBorder = new DimensionalWorldBorder(this);
-            ServerLevel overworld = this.getServer().getLevel(Level.OVERWORLD);
-            WorldBorder defaultBorder = overworld.getWorldBorder();
-            // Set up appropriate world border for voidspace dimensions - exact chunk 0 boundaries
-            this.customWorldBorder.setCenter(7.5, 7.5);
-            this.customWorldBorder.setSize(16.0); // Exactly chunk 0 size (16x16 blocks)
-            this.customWorldBorder.setDamagePerBlock(0.2);
-            this.customWorldBorder.setWarningBlocks(0); // No warning - immediate damage at border
-            this.customWorldBorder.setAbsoluteMaxSize(16); // Prevent expansion beyond chunk size
-            LOGGER.info("Custom world border initialized: center=(7.5,7.5), size=16, damage=0.2, warning=0");
+            LOGGER.info("Initializing custom world border for dimension: {} (chunkSize={})",
+                        this.dimension().location(), this.chunkSize);
+            this.customWorldBorder = new DimensionalWorldBorder(this, this.chunkSize);
         }
         return this.customWorldBorder;
     }

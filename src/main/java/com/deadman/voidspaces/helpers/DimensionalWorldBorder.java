@@ -11,92 +11,95 @@ public class DimensionalWorldBorder extends WorldBorder {
     private static final Logger LOGGER = LoggerFactory.getLogger(DimensionalWorldBorder.class);
     private final ServerLevel dimension;
     private boolean initialized = false;
+    private double expectedCenter;
+    private double expectedSize;
+    private int expectedMaxSize;
 
-    public DimensionalWorldBorder(ServerLevel dimension) {
+    public DimensionalWorldBorder(ServerLevel dimension, int chunkSize) {
         super();
         this.dimension = dimension;
+        configure(chunkSize);
+    }
+
+    /** Re-apply border parameters when chunk size changes after initial creation. */
+    public void configure(int chunkSize) {
+        initialized = false;
+        expectedSize = chunkSize * 16.0;
+        expectedCenter = chunkSize * 8.0 - 0.5;
+        expectedMaxSize = chunkSize * 16;
+        setCenter(expectedCenter, expectedCenter);
+        setSize(expectedSize);
+        setAbsoluteMaxSize(expectedMaxSize);
+        setDamagePerBlock(0.2);
+        setWarningBlocks(0);
+        initialized = true;
+        LOGGER.info("DimensionalWorldBorder configured: chunkSize={}, center=({},{}), size={}",
+                    chunkSize, expectedCenter, expectedCenter, expectedSize);
     }
 
     @Override
     public boolean isWithinBounds(BlockPos pos) {
-        if (pos.getY() < this.dimension.getMinBuildHeight() || pos.getY() >= this.dimension.getMaxBuildHeight()) {
+        if (pos.getY() < dimension.getMinBuildHeight() || pos.getY() >= dimension.getMaxBuildHeight()) {
             return false;
         }
         return super.isWithinBounds(pos);
     }
-    
-    // Override setters to prevent external modification of our custom border settings
+
     @Override
     public void setCenter(double x, double z) {
         if (!initialized) {
-            LOGGER.info("DimensionalWorldBorder: Setting initial center to ({}, {})", x, z);
             super.setCenter(x, z);
-            if (x == 7.5 && z == 7.5) {
-                initialized = true;
-            }
-        } else if (x != 7.5 || z != 7.5) {
-            LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change center from (7.5,7.5) to ({}, {})", x, z);
-            // Ignore external attempts to change our center from (7.5,7.5)
+        } else if (x != expectedCenter || z != expectedCenter) {
+            LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change center to ({},{})", x, z);
         } else {
             super.setCenter(x, z);
         }
     }
-    
+
     @Override
     public void setSize(double size) {
         if (!initialized) {
-            LOGGER.info("DimensionalWorldBorder: Setting initial size to {}", size);
             super.setSize(size);
-            if (size == 16.0) {
-                initialized = true;
-            }
-        } else if (size != 16.0) {
-            LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change size from 16 to {}", size);
-            // Ignore external attempts to change our size from 16
+        } else if (size != expectedSize) {
+            LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change size to {}", size);
         } else {
             super.setSize(size);
         }
     }
-    
+
     @Override
     public void setAbsoluteMaxSize(int maxSize) {
-        if (!initialized || maxSize == 16) {
-            LOGGER.info("DimensionalWorldBorder: Setting max size to {}", maxSize);
+        if (!initialized || maxSize == expectedMaxSize) {
             super.setAbsoluteMaxSize(maxSize);
         } else {
             LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change max size to {}", maxSize);
         }
     }
-    
+
     @Override
     public void setDamagePerBlock(double damagePerBlock) {
         if (!initialized || damagePerBlock == 0.2) {
-            LOGGER.info("DimensionalWorldBorder: Setting damage per block to {}", damagePerBlock);
             super.setDamagePerBlock(damagePerBlock);
         } else {
             LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change damage per block to {}", damagePerBlock);
         }
     }
-    
+
     @Override
     public void setWarningBlocks(int warningBlocks) {
         if (!initialized || warningBlocks == 0) {
-            LOGGER.info("DimensionalWorldBorder: Setting warning blocks to {}", warningBlocks);
             super.setWarningBlocks(warningBlocks);
         } else {
             LOGGER.warn("DimensionalWorldBorder: Ignoring attempt to change warning blocks to {}", warningBlocks);
         }
     }
-    
+
     @Override
     public void addListener(BorderChangeListener listener) {
-        // Check if this is a delegate listener trying to sync with overworld
         if (listener instanceof BorderChangeListener.DelegateBorderChangeListener) {
             LOGGER.warn("DimensionalWorldBorder: Ignoring delegate border listener to prevent overworld sync");
-            // Don't add delegate listeners that would sync us with the overworld
             return;
         }
-        LOGGER.info("DimensionalWorldBorder: Adding border listener: {}", listener.getClass().getSimpleName());
         super.addListener(listener);
     }
 }
